@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -507,17 +508,129 @@ sys_pipe(void)
 uint64
 sys_mmap(void)
 {
-  return -1;
+  int length,prot,flags,fd,offset;
+  struct file *f;
+  struct proc *p;
+  struct vma *vma;
+  uint64 addr;
+  p=myproc();
+  vma=0;
+
+  argint(0, &length);
+  argint(1, &prot);
+  argint(2, &flags);
+  if (argfd(3, &fd, &f) < 0) {return -1;}
+  argint(4, &offset);
+
+  if (length <= 0 || fd < 0) {return -1;}
+
+  for(int i = 0; i < NVMA; i++){
+    if (p->vmas[i].used == 0){
+      vma = &p->vmas[i];
+      break;
+    }
+  }
+
+  if (vma == 0) {return -1;}
+  addr = TRAPFRAME - PGROUNDUP(length); //PGROUNDUP(sz) 매크로: sz 페이지 크기로 올림 정렬(4KB)
+  for(int j = 0; j < NVMA; j++){
+    if (p->vmas[j].used == 0) {continue;}
+    if (addr < (p->vmas[j].addr + p->vmas[j].length) && (addr + PGROUNDUP(length) > p->vmas[j].addr))
+    {
+      addr = p->vmas[j].addr - PGROUNDUP(length);
+      j=-1;
+      continue;
+    }
+  }
+
+  vma->used = 1;
+  vma->addr = addr;
+  vma->length = length;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->offset = offset;
+  vma->f = filedup(f);
+  return addr;
 }
 
 uint64
 sys_munmap(void)
 {
-  return -1;
+  struct proc* p;
+  struct vma* vma;
+  int length;
+  uint64 addr;
+
+  p=myproc();
+  vma=0;
+  argaddr(0, &addr);
+  argint(1, &length);
+
+  for (int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used && addr >= p->vmas[i].addr && addr + length <= p->vmas[i].addr + p->vmas[i].length)
+    { vma = &p->vmas[i]; break; } 
+  }
+  if (vma==0) {return -1;}
+  //reject middle hole case
+  if (addr != vma->addr && (addr+length) != (vma->addr + vma->length)) {return -1;}
+
+  for(uint64 va = addr; va < addr + length; va += PGSIZE){
+      if(walkaddr(p->pagetable, va) == 0) {continue;} //skip if no PTE in area
+
+      if(vma->flags & MAP_SHARED){
+        uint64 file_offset = vma->offset + (va - vma->addr);
+        begin_op();
+        ilock(vma->f->ip);
+        writei(vma->f->ip, 1, va, file_offset, PGSIZE);
+        iunlock(vma->f->ip);
+        end_op(); //prevent from kernel panic (crash safety)
+    }
+    uvmunmap(p->pagetable, va, 1, 1); //
+  }
+    if(addr == vma->addr){
+      vma->addr += length;
+      vma->offset += length;
+    }
+    vma->length -= length;
+
+    if(vma->length == 0){
+      fileclose(vma->f);
+      vma->used = 0;
+    }
+    return 0;
 }
 
 int
 mmapfault(uint64 va)
 {
-  return -1;
+  struct proc* p;
+  p=myproc();
+  va = PGROUNDDOWN(va);
+  struct vma *vma;
+  char *mem;
+  int perm;
+  vma = 0;
+  for (int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used && va >= p->vmas[i].addr && va < p->vmas[i].addr + p->vmas[i].length)
+    { vma = &p->vmas[i]; break; }
+  }
+  if(vma==0) {return -1;}
+  if(walkaddr(p->pagetable, va) != 0) {return -1;} //이미 매핑된 상태
+
+  mem = kalloc();
+  if(mem==0) {return -1;}
+  memset(mem,0,PGSIZE);
+
+  uint64 foffset = vma->offset + (va-vma->addr);
+  ilock(vma->f->ip);
+  readi(vma->f->ip, 0, (uint64)mem, foffset, PGSIZE); //0은 mem이 커널 주소임을 나타냄
+  iunlock(vma->f->ip);
+
+  perm = PTE_U;
+  if(vma->prot & PROT_READ) {perm |= PTE_R;}
+  if(vma->prot & PROT_WRITE) {perm |= PTE_W;}
+
+  if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) != 0) 
+  {kfree(mem); return -1;}
+  return 0;
 }

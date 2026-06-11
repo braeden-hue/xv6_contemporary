@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
+
 
 struct cpu cpus[NCPU];
 
@@ -291,7 +296,14 @@ kfork(void)
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
-      np->ofile[i] = filedup(p->ofile[i]);
+      np->ofile[i] = filedup(p->ofile[i]); 
+
+  for(i = 0; i < NVMA; i++){ 
+    if(p->vmas[i].used){
+      np->vmas[i] = p->vmas[i];
+      filedup(np->vmas[i].f);
+    }
+  }
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
@@ -333,6 +345,7 @@ void
 kexit(int status)
 {
   struct proc *p = myproc();
+  struct vma* vma;
 
   if(p == initproc)
     panic("init exiting");
@@ -346,6 +359,25 @@ kexit(int status)
     }
   }
 
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      vma = &p->vmas[i];
+      for(uint64 va = vma->addr; va < (vma->addr + vma->length); va+=PGSIZE){
+        if (walkaddr(p->pagetable, va) == 0) {continue;}
+        if (vma->flags & MAP_SHARED){
+          uint64 foffset = vma->offset + (va - vma->addr);
+          begin_op();
+          ilock(vma->f->ip);
+          writei(vma->f->ip, 1, va, foffset, PGSIZE);
+          iunlock(vma->f->ip);
+          end_op();
+        }
+        uvmunmap(p->pagetable, va, 1, 1);
+      }
+      fileclose(vma->f);
+      vma->used=0;
+    }
+  }
   begin_op();
   iput(p->cwd);
   end_op();

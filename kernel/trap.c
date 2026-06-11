@@ -76,7 +76,7 @@ usertrap(void)
     if(vmfault(p->pagetable, stval, (r_scause() == 13) ? 1 : 0) != 0){
       // lazily-allocated heap page handled
     } else if(mmapfault(stval) == 0){
-      // mmap lazy fault handled
+      // mmap lazy fault handled ok.
     } else {
       printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
       printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());

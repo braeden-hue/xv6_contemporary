@@ -19,7 +19,8 @@
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
-static int
+// Not static: kernel/sysfile_mmap.cpp (Phase 1.5) calls this too.
+int
 argfd(int n, int *pfd, struct file **pf)
 {
   int fd;
@@ -505,53 +506,9 @@ sys_pipe(void)
   return 0;
 }
 
-uint64
-sys_mmap(void)
-{
-  int length,prot,flags,fd,offset;
-  struct file *f;
-  struct proc *p;
-  struct vma *vma;
-  uint64 addr;
-  p=myproc();
-  vma=0;
-
-  argint(0, &length);
-  argint(1, &prot);
-  argint(2, &flags);
-  if (argfd(3, &fd, &f) < 0) {return -1;}
-  argint(4, &offset);
-
-  if (length <= 0 || fd < 0) {return -1;}
-
-  for(int i = 0; i < NVMA; i++){
-    if (p->vmas[i].used == 0){
-      vma = &p->vmas[i];
-      break;
-    }
-  }
-
-  if (vma == 0) {return -1;}
-  addr = TRAPFRAME - PGROUNDUP(length); //PGROUNDUP(sz) 매크로: sz 페이지 크기로 올림 정렬(4KB)
-  for(int j = 0; j < NVMA; j++){
-    if (p->vmas[j].used == 0) {continue;}
-    if (addr < (p->vmas[j].addr + p->vmas[j].length) && (addr + PGROUNDUP(length) > p->vmas[j].addr))
-    {
-      addr = p->vmas[j].addr - PGROUNDUP(length);
-      j=-1;
-      continue;
-    }
-  }
-
-  vma->used = 1;
-  vma->addr = addr;
-  vma->length = length;
-  vma->prot = prot;
-  vma->flags = flags;
-  vma->offset = offset;
-  vma->f = filedup(f);
-  return addr;
-}
+// sys_mmap moved to kernel/sysfile_mmap.cpp (Phase 1.5: C++ type-safety refactor,
+// see plan.md). Declared extern "C" there; kernel/syscall.c's `extern uint64
+// sys_mmap(void);` links against it unchanged.
 
 uint64
 sys_munmap(void)

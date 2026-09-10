@@ -13,6 +13,7 @@ OBJS = \
   $K/main.o \
   $K/vm.o \
   $K/proc.o \
+  $K/scheduler.o \
   $K/swtch.o \
   $K/trampoline.o \
   $K/trap.o \
@@ -26,6 +27,7 @@ OBJS = \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \
+  $K/sysfile_mmap.o \
   $K/kernelvec.o \
   $K/plic.o \
   $K/virtio_disk.o
@@ -55,7 +57,12 @@ endif
 QEMU = qemu-system-riscv64
 MIN_QEMU_VERSION = 7.2
 
-CC = $(TOOLPREFIX)gcc
+# Pin to GCC 14 so the C and C++ (C++23) toolchains stay ABI-matched.
+# Override with `make GCC_VER=` to fall back to the system default gcc/g++.
+GCC_VER = -14
+
+CC = $(TOOLPREFIX)gcc$(GCC_VER)
+CXX = $(TOOLPREFIX)g++$(GCC_VER)
 AS = $(TOOLPREFIX)gas
 LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
@@ -84,6 +91,18 @@ ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
 
+# C++23 flags for kernel-side C++ modules (scheduler policies, etc.).
+# Shares the freestanding/arch flags with CFLAGS; adds the C++-specific
+# constraints needed since there's no libstdc++ runtime support here.
+CXXFLAGS = $(filter-out -Wno-main,$(CFLAGS))
+CXXFLAGS += -std=c++23
+CXXFLAGS += -fno-exceptions -fno-rtti -fno-threadsafe-statics
+
+# Phase 0.5: static analysis via GCC's built-in analyzer (no extra install
+# needed). Kept separate from CXXFLAGS since -fanalyzer noticeably slows
+# compilation; run explicitly with `make analyze`.
+CXXFLAGS_ANALYZE = $(CXXFLAGS) -fanalyzer
+
 LDFLAGS = -z max-page-size=4096
 
 $K/kernel: $(OBJS) $K/kernel.ld
@@ -93,6 +112,15 @@ $K/kernel: $(OBJS) $K/kernel.ld
 
 $K/%.o: $K/%.S
 	$(CC) -march=rv64gc -g -c -o $@ $<
+
+$K/%.o: $K/%.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+analyze:
+	@for f in $(wildcard $K/*.cpp); do \
+		echo "== $$f =="; \
+		$(CXX) $(CXXFLAGS_ANALYZE) -fsyntax-only -I. $$f; \
+	done
 
 tags: $(OBJS)
 	etags kernel/*.S kernel/*.c

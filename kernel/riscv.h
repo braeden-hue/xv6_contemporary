@@ -282,6 +282,22 @@ r_time()
   return x;
 }
 
+static inline uint64
+r_cycle()
+{
+  uint64 x;
+  asm volatile("csrr %0, cycle" : "=r" (x) );
+  return x;
+}
+
+static inline uint64
+r_instret()
+{
+  uint64 x;
+  asm volatile("csrr %0, instret" : "=r" (x) );
+  return x;
+}
+
 // enable device interrupts
 static inline void
 intr_on()

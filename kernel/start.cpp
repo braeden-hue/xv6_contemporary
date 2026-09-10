@@ -4,14 +4,26 @@
 #include "riscv.h"
 #include "defs.h"
 
-void main();
-void timerinit();
+enum class Mcounteren : uint64 { CY = 1u << 0, TM = 1u << 1, IR = 1u << 2 };
+constexpr Mcounteren operator|(Mcounteren a, Mcounteren b)
+{
+  return static_cast<Mcounteren>(static_cast<uint64>(a) | static_cast<uint64>(b));
+}
+
+constexpr uint64 raw(Mcounteren m)
+{
+  return static_cast<uint64>(m);
+}
+
+
+extern "C" void main();
+extern "C" void timerinit();
 
 // entry.S needs one stack per CPU.
 __attribute__ ((aligned (16))) char stack0[4096 * NCPU];
 
 // entry.S jumps here in machine mode on stack0.
-void
+extern "C" void
 start()
 {
   // set M Previous Privilege mode to Supervisor, for mret.
@@ -49,7 +61,7 @@ start()
 }
 
 // ask each hart to generate timer interrupts.
-void
+extern "C" void
 timerinit()
 {
   // enable supervisor-mode timer interrupts.
@@ -59,7 +71,7 @@ timerinit()
   w_menvcfg(r_menvcfg() | (1L << 63));
 
   // allow supervisor to use stimecmp and time.
-  w_mcounteren(r_mcounteren() | 2);
+  w_mcounteren(r_mcounteren() | raw(Mcounteren::CY | Mcounteren::TM | Mcounteren::IR));
 
   // ask for the very first timer interrupt.
   w_stimecmp(r_time() + 1000000);

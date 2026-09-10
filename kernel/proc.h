@@ -1,3 +1,7 @@
+#pragma once   // needed once C++ files started composing multiple headers that
+               // each pull this one in (Phase 1); the original .c files never
+               // double-included it so this was never needed before.
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -118,4 +122,8 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   struct vma vmas[NVMA];       // mmap regions
+  uint64 arrival_seq;          // Phase 1 (FCFS): order this proc last became RUNNABLE
 };
+
+extern struct proc proc[NPROC];   // Phase 1: sched_fcfs.cpp's pick_next() scans this
+                                   // (must come after struct proc is complete)

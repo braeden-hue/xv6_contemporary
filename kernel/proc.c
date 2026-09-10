@@ -20,8 +20,13 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+uint64 next_seq = 1;          // Phase 1 (FCFS): monotonic "became RUNNABLE" counter
+struct spinlock seq_lock;
+
 extern void forkret(void);
 static void freeproc(struct proc *p);
+static void mark_runnable(struct proc *p);
+extern void scheduler_dispatch(void) __attribute__((noreturn));   // kernel/sched_fcfs.cpp, Phase 1
 
 extern char trampoline[]; // trampoline.S
 
@@ -55,12 +60,24 @@ procinit(void)
   struct proc *p;
 
   initlock(&pid_lock, "nextpid");
+  initlock(&seq_lock, "arrival_seq");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->state = UNUSED;
       p->kstack = KSTACK((int) (p - proc));
   }
+}
+
+// Phase 1 (FCFS): call with p->lock already held, whenever a proc becomes
+// RUNNABLE, so pick_next() can order by arrival instead of array position.
+static void
+mark_runnable(struct proc *p)
+{
+  acquire(&seq_lock);
+  p->arrival_seq = next_seq++;
+  release(&seq_lock);
+  p->state = RUNNABLE;
 }
 
 // Must be called with interrupts disabled,
@@ -237,7 +254,7 @@ userinit(void)
 
   p->cwd = namei("/");
 
-  p->state = RUNNABLE;
+  mark_runnable(p);
 
   release(&p->lock);
 }
@@ -317,7 +334,7 @@ kfork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
-  np->state = RUNNABLE;
+  mark_runnable(np);
   release(&np->lock);
 
   return pid;
@@ -462,42 +479,10 @@ kwait(uint64 addr)
 void
 scheduler(void)
 {
-  struct proc *p;
-  struct cpu *c = mycpu();
-
-  c->proc = 0;
-  for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
-    intr_on();
-    intr_off();
-
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
-      }
-      release(&p->lock);
-    }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
-    }
-  }
+  // Phase 1: the selection logic (which RUNNABLE proc to pick) now lives in
+  // kernel/sched_fcfs.cpp as a concept-constrained policy; this function
+  // only hands off to it. See plan.md Phase 1 for the full design.
+  scheduler_dispatch();
 }
 
 // Switch to scheduler.  Must hold only p->lock
@@ -533,7 +518,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
-  p->state = RUNNABLE;
+  mark_runnable(p);
   sched();
   release(&p->lock);
 }
@@ -617,7 +602,7 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
+        mark_runnable(p);
       }
       release(&p->lock);
     }
@@ -638,7 +623,7 @@ kkill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        p->state = RUNNABLE;
+        mark_runnable(p);
       }
       release(&p->lock);
       return 0;

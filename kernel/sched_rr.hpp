@@ -26,4 +26,8 @@ struct RR {
         }
         return nullptr;
     }
+
+    // Phase 1.8: always yield on the timer tick -- this is exactly today's
+    // trap.c behavior before the policy hook existed, preserved verbatim.
+    bool should_preempt(struct proc*) { return true; }
 };

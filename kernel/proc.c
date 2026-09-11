@@ -23,6 +23,12 @@ struct spinlock pid_lock;
 uint64 next_seq = 1;          // Phase 1 (FCFS): monotonic "became RUNNABLE" counter
 struct spinlock seq_lock;
 
+// Phase 1.8: count of RUNNABLE procs with priority==LatencySensitive(1), kept
+// up to date regardless of which policy is active (same precedent as
+// arrival_seq above) so PriorityPreempt<true>'s should_preempt() can check
+// "is anyone latency-sensitive waiting" in O(1) instead of rescanning proc[].
+int g_ls_runnable_count = 0;
+
 extern void forkret(void);
 static void freeproc(struct proc *p);
 static void mark_runnable(struct proc *p);
@@ -77,6 +83,22 @@ mark_runnable(struct proc *p)
   acquire(&seq_lock);
   p->arrival_seq = next_seq++;
   release(&seq_lock);
+  if (p->priority == 1)   // LatencySensitive -- Phase 1.8
+    __sync_fetch_and_add(&g_ls_runnable_count, 1);
+  // Phase 1.8b: open a new RUNNABLE-wait interval. Closed (added into
+  // wait_ticks_total/wait_ticks_max) by scheduler.cpp's dispatch() the
+  // moment this proc is actually picked and switched to RUNNING -- mirror
+  // image of that close, same as arrival_seq/g_ls_runnable_count above.
+  // __atomic_load_n instead of a plain read: deliberately NOT acquiring
+  // tickslock here (kernel/trap.c's clockintr() holds tickslock across its
+  // wakeup() call, which itself acquires a sleeping proc's p->lock -- so
+  // taking tickslock here, with p->lock already held by our caller, would
+  // risk the reverse nesting order and a lock-order violation). The
+  // atomic load is what makes that lock-free read well-defined against
+  // clockintr()'s atomic increment, per the Codex Implementation Gate
+  // audit (2026-09-12) -- a plain unsynchronized read was flagged as
+  // insufficient even though RV64 aligned loads don't tear in practice.
+  p->sched_ready_tick = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
   p->state = RUNNABLE;
 }
 
@@ -173,6 +195,21 @@ found:
     p->vmas[i].used = 0;
     p->vmas[i].f = 0;
   }
+
+  // Phase 1.8: a reused slot must not inherit the previous occupant's
+  // priority -- every new process starts Normal until it explicitly asks.
+  p->priority = 0;
+
+  // Phase 1.8b: same precedent as p->priority above -- a reused slot must
+  // not inherit the previous occupant's accumulated tick accounting, or
+  // per-task fairness stats would be silently corrupted across NPROC
+  // slot reuse. sched_ready_tick is NOT reset here (same precedent as
+  // arrival_seq, which also isn't): mark_runnable() always stamps it
+  // before this proc can ever become RUNNABLE, so a stale value here is
+  // never observed.
+  p->wait_ticks_total = 0;
+  p->wait_ticks_max = 0;
+  p->run_ticks_total = 0;
 
   return p;
 }

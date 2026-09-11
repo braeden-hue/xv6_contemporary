@@ -26,4 +26,8 @@ struct FCFS {
         }
         return candidate;
     }
+
+    // Phase 1.8: not this policy's focus -- keep today's unconditional
+    // per-tick yield so FCFS's already-verified behavior doesn't change.
+    bool should_preempt(struct proc*) { return true; }
 };

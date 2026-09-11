@@ -15,6 +15,7 @@ extern char trampoline[], uservec[];
 void kernelvec();
 
 extern int devintr();
+extern int policy_should_preempt(struct proc *p);   // kernel/scheduler.cpp (Phase 1.8)
 
 void
 trapinit(void)
@@ -88,11 +89,32 @@ usertrap(void)
     setkilled(p);
   }
 
+  // Phase 1.8b: charge this tick to whoever was actually running when it
+  // fired -- BEFORE the killed(p)/kexit(-1) check right below, because
+  // kexit() is noreturn: a proc killed by someone else just before this
+  // same trap must still get credit for the tick it just consumed, or
+  // its very last tick of execution silently vanishes from
+  // run_ticks_total (Codex Implementation Gate audit, 2026-09-12).
+  // Deliberately NOT under p->lock: the only writer of a given proc's
+  // run_ticks_total is that proc's own trap path on the one CPU it's
+  // actually running on (never concurrent with itself), so this
+  // increment itself can't race with another increment. sys_sched_stats()
+  // (kernel/sysproc.c) reads this field from a different CPU while
+  // holding p->lock, which does NOT synchronize with this write -- so
+  // both sides use __atomic_fetch_add/__atomic_load_n (relaxed) instead
+  // of a plain `++`/read, per the same audit: RV64's aligned-access
+  // non-tearing guarantee is a hardware property, not a substitute for
+  // defined C/C++ concurrent-access semantics.
+  if(which_dev == 2)
+    __atomic_fetch_add(&p->run_ticks_total, 1, __ATOMIC_RELAXED);
+
   if(killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  // give up the CPU if this is a timer interrupt and the active policy
+  // says so (Phase 1.8). RR/FCFS's should_preempt() always returns true,
+  // so this is behaviorally identical to the old unconditional yield().
+  if(which_dev == 2 && policy_should_preempt(p))
     yield();
 
   prepare_return();
@@ -163,8 +185,16 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
+  if(which_dev == 2 && myproc() != 0){
+    // Phase 1.8b: same tick-charging as usertrap() above (atomic, same
+    // reasoning -- see that comment), kept in sync so a proc that's
+    // mid-syscall (running kernel code) when the timer fires still gets
+    // its run_ticks_total credited -- otherwise kernel-heavy workloads
+    // would look artificially starved in the fairness stats relative to
+    // user-mode-heavy ones.
+    __atomic_fetch_add(&myproc()->run_ticks_total, 1, __ATOMIC_RELAXED);
     yield();
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -177,7 +207,26 @@ clockintr()
 {
   if(cpuid() == 0){
     acquire(&tickslock);
-    ticks++;
+    // Phase 1.8b: atomic increment (not `ticks++`) so the Phase 1.8b
+    // instrumentation's lock-free readers (kernel/proc.c's mark_runnable(),
+    // kernel/scheduler.cpp's dispatch(), kernel/sysproc.c's
+    // sys_sched_stats() -- see their comments for why they can't just take
+    // tickslock, to avoid a tickslock-inside-p->lock ordering that
+    // conflicts with wakeup() below acquiring p->lock while tickslock is
+    // still held) have a well-defined value to load instead of racing with
+    // this plain read-modify-write. tickslock itself is still held, for
+    // the existing wakeup() ordering -- this is about the *readers*
+    // outside this lock, not about this writer needing more protection.
+    // __atomic_* (not this file's/kernel/proc.c's existing
+    // __sync_fetch_and_add/__sync_fetch_and_sub for g_ls_runnable_count):
+    // both are freestanding-safe GCC/Clang compiler builtins that lower
+    // directly to RISC-V AMO instructions with zero library symbols (same
+    // category already proven in this exact build, see plan.md's
+    // freestanding-availability table for std::atomic) -- __atomic_* is
+    // used here specifically because it has a genuine relaxed *load*
+    // (__atomic_load_n), which __sync_* has no equivalent for without
+    // faking one as a wasteful RMW (e.g. fetch_and_add(&x, 0)).
+    __atomic_fetch_add(&ticks, 1, __ATOMIC_RELAXED);
     wakeup(&ticks);
     release(&tickslock);
   }

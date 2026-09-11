@@ -14,6 +14,7 @@ OBJS = \
   $K/vm.o \
   $K/proc.o \
   $K/scheduler.o \
+  $K/bench.o \
   $K/swtch.o \
   $K/trampoline.o \
   $K/trap.o \
@@ -174,6 +175,11 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_mmaptest\
+	$U/_latencytest\
+	$U/_schedstat\
+	$U/_mypid\
+	$U/_burn\
+	$U/_statstest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -6,6 +6,9 @@
 
 volatile static int started = 0;
 
+extern void run_calibration(void);    // kernel/bench.cpp: instret calibration (done, kept for re-verification)
+extern void run_dispatch_bench(void); // kernel/bench.cpp: static vs fnptr pick_next() comparison
+
 // start() jumps here in supervisor mode on all CPUs.
 void
 main()
@@ -16,6 +19,7 @@ main()
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
+    run_dispatch_bench();
     kinit();         // physical page allocator
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging

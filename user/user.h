@@ -26,6 +26,10 @@ int pause(int);
 int uptime(void);
 char* mmap(int len, int prot, int flags, int fd, int offset);
 int   munmap(void *addr, int len);
+int   setpriority(int level);   // Phase 1.8: 0=Normal, 1=LatencySensitive
+// Phase 1.8b: out must point to 4 uint64s -- see kernel/sysproc.c's
+// sys_sched_stats() comment for what each slot means.
+int   sched_stats(int pid, uint64 *out);
 
 // ulib.c
 int stat(const char*, struct stat*);

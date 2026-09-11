@@ -123,6 +123,48 @@ struct proc {
   char name[16];               // Process name (debugging)
   struct vma vmas[NVMA];       // mmap regions
   uint64 arrival_seq;          // Phase 1 (FCFS): order this proc last became RUNNABLE
+  int priority;                // Phase 1.8: 0=Normal, 1=LatencySensitive. Explicit only
+                                // (set via syscall) -- never inferred from run length.
+
+  // Phase 1.8b: per-task CPU share / max runnable-wait instrumentation
+  // (plan.md/HANDOFF.md "다음 작업 순서" item 3). Tick-granularity only --
+  // inherits the same approximation limits already documented for this
+  // project's tick-based accounting (a sub-tick run/wait segment can be
+  // missed or double-counted at a tick boundary). Reset to 0 by
+  // allocproc() on slot reuse (see the comment there) so a new process
+  // never inherits a previous occupant's accumulated ticks.
+  //
+  // Locking is NOT uniform across these four fields (Codex Implementation
+  // Gate audit, 2026-09-12 -- an earlier draft of this comment claimed
+  // "p->lock must be held for all of these", which was wrong for the last
+  // one):
+  //   - sched_ready_tick, wait_ticks_total, wait_ticks_max: written only
+  //     while p->lock is held (mark_runnable() in kernel/proc.c opens the
+  //     interval, dispatch() in kernel/scheduler.cpp closes it), and read
+  //     only while p->lock is held (sys_sched_stats() in kernel/sysproc.c)
+  //     -- ordinary p->lock-protected fields, no atomics needed.
+  //   - run_ticks_total: incremented from kernel/trap.c's usertrap()/
+  //     kerneltrap() WITHOUT p->lock (that path never takes it), so every
+  //     increment/read after the proc is live goes through the atomic
+  //     counter ops (__atomic_fetch_add()/__atomic_load_n(), relaxed),
+  //     never a plain `++`/read, regardless of whether the caller happens
+  //     to also hold p->lock. The one exception is allocproc()'s plain
+  //     `p->run_ticks_total = 0;` on slot reuse (kernel/proc.c) -- that's
+  //     not a race because it runs before the proc can be observed by any
+  //     other CPU (p->lock is held and the proc is still UNUSED/USED, not
+  //     yet runnable), same reasoning as p->priority's reset right above it.
+  uint64 sched_ready_tick;     // tick at which this proc most recently became RUNNABLE
+  uint64 wait_ticks_total;     // cumulative RUNNABLE-wait ticks, closed intervals only
+                                // (i.e. up to the last time it was actually dispatched --
+                                // a still-waiting proc's *open* interval is NOT included
+                                // here; sys_sched_stats() adds that back in at read time
+                                // so a mid-experiment sample doesn't make starvation
+                                // invisible just because the wait hasn't ended yet)
+  uint64 wait_ticks_max;       // longest single closed RUNNABLE-wait interval observed
+  uint64 run_ticks_total;      // cumulative ticks this proc was the one actually
+                                // RUNNING, charged once per timer tick from both
+                                // usertrap() and kerneltrap() (kernel/trap.c) --
+                                // atomic, see locking note above
 };
 
 extern struct proc proc[NPROC];   // Phase 1: sched_fcfs.cpp's pick_next() scans this

@@ -22,3 +22,5 @@
 #define SYS_close  21
 #define SYS_mmap   22
 #define SYS_munmap 23
+#define SYS_setpriority 24   // Phase 1.8: 0=Normal, 1=LatencySensitive, explicit only
+#define SYS_sched_stats 25   // Phase 1.8b: read back a pid's tick accounting (fairness measurement)

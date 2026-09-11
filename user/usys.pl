@@ -44,3 +44,5 @@ entry("pause");
 entry("uptime");
 entry("mmap");
 entry("munmap");
+entry("setpriority");
+entry("sched_stats");

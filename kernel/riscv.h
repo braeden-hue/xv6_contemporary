@@ -286,7 +286,10 @@ static inline uint64
 r_cycle()
 {
   uint64 x;
-  asm volatile("csrr %0, cycle" : "=r" (x) );
+  // "memory" clobber: without it the compiler is free to hoist/sink ordinary
+  // loads/stores across this asm (it has no visible memory operand), which
+  // would leak unrelated instructions into a benchmark's measured window.
+  asm volatile("csrr %0, cycle" : "=r" (x) : : "memory");
   return x;
 }
 
@@ -294,7 +297,7 @@ static inline uint64
 r_instret()
 {
   uint64 x;
-  asm volatile("csrr %0, instret" : "=r" (x) );
+  asm volatile("csrr %0, instret" : "=r" (x) : : "memory");
   return x;
 }
 

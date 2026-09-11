@@ -1,0 +1,26 @@
+0000000080002698 <run_dispatch_bench>:
+    80002698:	715d                	addi	sp,sp,-80
+    8000269a:	e486                	sd	ra,72(sp)
+    8000269c:	e0a2                	sd	s0,64(sp)
+    8000269e:	fc26                	sd	s1,56(sp)
+    800026a0:	f84a                	sd	s2,48(sp)
+    800026a2:	f44e                	sd	s3,40(sp)
+    800026a4:	f052                	sd	s4,32(sp)
+    800026a6:	ec56                	sd	s5,24(sp)
+    800026a8:	e85a                	sd	s6,16(sp)
+    800026aa:	e45e                	sd	s7,8(sp)
+    800026ac:	e062                	sd	s8,0(sp)
+    800026ae:	0880                	addi	s0,sp,80
+    800026b0:	e3fff0ef          	jal	800024ee <_ZL17bench_reset_procsv>
+    800026b4:	c02026f3          	rdinstret	a3
+    800026b8:	0c800793          	li	a5,200
+    800026bc:	00023717          	auipc	a4,0x23
+    800026c0:	2c470713          	addi	a4,a4,708 # 80025980 <_ZL11bench_procs>
+    800026c4:	37fd                	addiw	a5,a5,-1
+    800026c6:	fffd                	bnez	a5,800026c4 <run_dispatch_bench+0x2c>
+    800026c8:	c0202973          	rdinstret	s2
+    800026cc:	40d90933          	sub	s2,s2,a3
+    800026d0:	e1fff0ef          	jal	800024ee <_ZL17bench_reset_procsv>
+    800026d4:	c0202b73          	rdinstret	s6
+    800026d8:	0c800493          	li	s1,200
+    800026dc:	00009a97          	auipc	s5,0x9

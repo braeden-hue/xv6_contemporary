@@ -1,0 +1,176 @@
+Phase 1.8b instrumentation (sched_stats()/schedstat/statstest) -- raw evidence
+2026-09-12, user-run in WSL Ubuntu 24.04 via VSCode terminal.
+
+Build: `make clean && make CPUS=1 qemu` (riscv64-linux-gnu-g++-14 / -gcc-14,
+GCC_VER=-14 per Makefile:63). Compile succeeded with no reported errors
+(QEMU booted, which requires a successful kernel link).
+
+=== usertests -q ===
+CORRECTION (Claude Code, after Codex flagged this section as an
+unsubstantiated paraphrase rather than raw evidence): the actual console
+transcript WAS captured, in `script -c "make CPUS=1 qemu" statstest_session.log`
+(the same script session that first exercised statstest, before it was
+revised to v2's 3-worker design) -- it was just not yet extracted into
+docs/bench/ when this file was first written. It now is:
+see [phase18b_usertests_raw_output.txt](phase18b_usertests_raw_output.txt)
+(lines 53-399 of that session log, verbatim, ending in "PASS ALL TESTS").
+That capture and this file's statstest v2 run are from builds of the same
+kernel source (only user/statstest.c changed, v1->v2, between them -- no
+kernel/ file was touched in between), so the usertests result applies to
+the same kernel binary as the statstest run below.
+
+=== statstest (v2, 3 workers) ===
+Command: `statstest` at the xv6 shell prompt, CPUS=1, ActivePolicy =
+PriorityPreempt<true> (kernel/scheduler.cpp), all workers default
+priority (Normal). Workers pid 4/5/6, sampler is the statstest process
+itself (parent), forked before any worker via kernel/proc.c's allocproc().
+
+Raw output (verbatim, all 40 samples x 3 workers = 120 lines + verdict):
+
+sample 0 worker 0 (pid 4): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 0 worker 1 (pid 5): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 0 worker 2 (pid 6): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 1 worker 0 (pid 4): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 1 worker 1 (pid 5): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 1 worker 2 (pid 6): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 2 worker 0 (pid 4): run_ticks=0 wait_ticks_total=0 wait_ticks_max=0 open_wait_ticks=0
+sample 2 worker 1 (pid 5): run_ticks=1 wait_ticks_total=2 wait_ticks_max=2 open_wait_ticks=1
+sample 2 worker 2 (pid 6): run_ticks=1 wait_ticks_total=3 wait_ticks_max=3 open_wait_ticks=0
+sample 3 worker 0 (pid 4): run_ticks=1 wait_ticks_total=1 wait_ticks_max=1 open_wait_ticks=2
+sample 3 worker 1 (pid 5): run_ticks=1 wait_ticks_total=2 wait_ticks_max=2 open_wait_ticks=1
+sample 3 worker 2 (pid 6): run_ticks=1 wait_ticks_total=3 wait_ticks_max=3 open_wait_ticks=0
+sample 4 worker 0 (pid 4): run_ticks=1 wait_ticks_total=1 wait_ticks_max=1 open_wait_ticks=2
+sample 4 worker 1 (pid 5): run_ticks=1 wait_ticks_total=2 wait_ticks_max=2 open_wait_ticks=1
+sample 4 worker 2 (pid 6): run_ticks=1 wait_ticks_total=3 wait_ticks_max=3 open_wait_ticks=0
+sample 5 worker 0 (pid 4): run_ticks=2 wait_ticks_total=4 wait_ticks_max=3 open_wait_ticks=2
+sample 5 worker 1 (pid 5): run_ticks=2 wait_ticks_total=5 wait_ticks_max=3 open_wait_ticks=1
+sample 5 worker 2 (pid 6): run_ticks=2 wait_ticks_total=6 wait_ticks_max=3 open_wait_ticks=0
+sample 6 worker 0 (pid 4): run_ticks=2 wait_ticks_total=4 wait_ticks_max=3 open_wait_ticks=2
+sample 6 worker 1 (pid 5): run_ticks=2 wait_ticks_total=5 wait_ticks_max=3 open_wait_ticks=1
+sample 6 worker 2 (pid 6): run_ticks=2 wait_ticks_total=6 wait_ticks_max=3 open_wait_ticks=0
+sample 7 worker 0 (pid 4): run_ticks=2 wait_ticks_total=4 wait_ticks_max=3 open_wait_ticks=2
+sample 7 worker 1 (pid 5): run_ticks=3 wait_ticks_total=8 wait_ticks_max=3 open_wait_ticks=1
+sample 7 worker 2 (pid 6): run_ticks=3 wait_ticks_total=9 wait_ticks_max=3 open_wait_ticks=0
+sample 8 worker 0 (pid 4): run_ticks=3 wait_ticks_total=7 wait_ticks_max=3 open_wait_ticks=2
+sample 8 worker 1 (pid 5): run_ticks=3 wait_ticks_total=8 wait_ticks_max=3 open_wait_ticks=1
+sample 8 worker 2 (pid 6): run_ticks=3 wait_ticks_total=9 wait_ticks_max=3 open_wait_ticks=0
+sample 9 worker 0 (pid 4): run_ticks=3 wait_ticks_total=7 wait_ticks_max=3 open_wait_ticks=2
+sample 9 worker 1 (pid 5): run_ticks=4 wait_ticks_total=11 wait_ticks_max=3 open_wait_ticks=1
+sample 9 worker 2 (pid 6): run_ticks=4 wait_ticks_total=12 wait_ticks_max=3 open_wait_ticks=0
+sample 10 worker 0 (pid 4): run_ticks=4 wait_ticks_total=10 wait_ticks_max=3 open_wait_ticks=2
+sample 10 worker 1 (pid 5): run_ticks=4 wait_ticks_total=11 wait_ticks_max=3 open_wait_ticks=1
+sample 10 worker 2 (pid 6): run_ticks=4 wait_ticks_total=12 wait_ticks_max=3 open_wait_ticks=0
+sample 11 worker 0 (pid 4): run_ticks=4 wait_ticks_total=10 wait_ticks_max=3 open_wait_ticks=2
+sample 11 worker 1 (pid 5): run_ticks=5 wait_ticks_total=14 wait_ticks_max=3 open_wait_ticks=1
+sample 11 worker 2 (pid 6): run_ticks=5 wait_ticks_total=15 wait_ticks_max=3 open_wait_ticks=0
+sample 12 worker 0 (pid 4): run_ticks=5 wait_ticks_total=13 wait_ticks_max=3 open_wait_ticks=2
+sample 12 worker 1 (pid 5): run_ticks=5 wait_ticks_total=14 wait_ticks_max=3 open_wait_ticks=1
+sample 12 worker 2 (pid 6): run_ticks=5 wait_ticks_total=15 wait_ticks_max=3 open_wait_ticks=0
+sample 13 worker 0 (pid 4): run_ticks=5 wait_ticks_total=13 wait_ticks_max=3 open_wait_ticks=2
+sample 13 worker 1 (pid 5): run_ticks=5 wait_ticks_total=14 wait_ticks_max=3 open_wait_ticks=1
+sample 13 worker 2 (pid 6): run_ticks=6 wait_ticks_total=18 wait_ticks_max=3 open_wait_ticks=0
+sample 14 worker 0 (pid 4): run_ticks=6 wait_ticks_total=16 wait_ticks_max=3 open_wait_ticks=2
+sample 14 worker 1 (pid 5): run_ticks=6 wait_ticks_total=17 wait_ticks_max=3 open_wait_ticks=1
+sample 14 worker 2 (pid 6): run_ticks=6 wait_ticks_total=18 wait_ticks_max=3 open_wait_ticks=0
+sample 15 worker 0 (pid 4): run_ticks=6 wait_ticks_total=16 wait_ticks_max=3 open_wait_ticks=2
+sample 15 worker 1 (pid 5): run_ticks=6 wait_ticks_total=17 wait_ticks_max=3 open_wait_ticks=1
+sample 15 worker 2 (pid 6): run_ticks=6 wait_ticks_total=18 wait_ticks_max=3 open_wait_ticks=0
+sample 16 worker 0 (pid 4): run_ticks=7 wait_ticks_total=19 wait_ticks_max=3 open_wait_ticks=2
+sample 16 worker 1 (pid 5): run_ticks=7 wait_ticks_total=20 wait_ticks_max=3 open_wait_ticks=1
+sample 16 worker 2 (pid 6): run_ticks=7 wait_ticks_total=21 wait_ticks_max=3 open_wait_ticks=0
+sample 17 worker 0 (pid 4): run_ticks=7 wait_ticks_total=19 wait_ticks_max=3 open_wait_ticks=2
+sample 17 worker 1 (pid 5): run_ticks=7 wait_ticks_total=20 wait_ticks_max=3 open_wait_ticks=1
+sample 17 worker 2 (pid 6): run_ticks=7 wait_ticks_total=21 wait_ticks_max=3 open_wait_ticks=0
+sample 18 worker 0 (pid 4): run_ticks=7 wait_ticks_total=19 wait_ticks_max=3 open_wait_ticks=2
+sample 18 worker 1 (pid 5): run_ticks=7 wait_ticks_total=20 wait_ticks_max=3 open_wait_ticks=1
+sample 18 worker 2 (pid 6): run_ticks=8 wait_ticks_total=24 wait_ticks_max=3 open_wait_ticks=0
+sample 19 worker 0 (pid 4): run_ticks=8 wait_ticks_total=22 wait_ticks_max=3 open_wait_ticks=2
+sample 19 worker 1 (pid 5): run_ticks=8 wait_ticks_total=23 wait_ticks_max=3 open_wait_ticks=1
+sample 19 worker 2 (pid 6): run_ticks=8 wait_ticks_total=24 wait_ticks_max=3 open_wait_ticks=0
+sample 20 worker 0 (pid 4): run_ticks=8 wait_ticks_total=22 wait_ticks_max=3 open_wait_ticks=2
+sample 20 worker 1 (pid 5): run_ticks=8 wait_ticks_total=23 wait_ticks_max=3 open_wait_ticks=1
+sample 20 worker 2 (pid 6): run_ticks=8 wait_ticks_total=24 wait_ticks_max=3 open_wait_ticks=0
+sample 21 worker 0 (pid 4): run_ticks=9 wait_ticks_total=25 wait_ticks_max=3 open_wait_ticks=2
+sample 21 worker 1 (pid 5): run_ticks=9 wait_ticks_total=26 wait_ticks_max=3 open_wait_ticks=1
+sample 21 worker 2 (pid 6): run_ticks=9 wait_ticks_total=27 wait_ticks_max=3 open_wait_ticks=0
+sample 22 worker 0 (pid 4): run_ticks=9 wait_ticks_total=25 wait_ticks_max=3 open_wait_ticks=2
+sample 22 worker 1 (pid 5): run_ticks=9 wait_ticks_total=26 wait_ticks_max=3 open_wait_ticks=1
+sample 22 worker 2 (pid 6): run_ticks=9 wait_ticks_total=27 wait_ticks_max=3 open_wait_ticks=0
+sample 23 worker 0 (pid 4): run_ticks=9 wait_ticks_total=25 wait_ticks_max=3 open_wait_ticks=2
+sample 23 worker 1 (pid 5): run_ticks=9 wait_ticks_total=26 wait_ticks_max=3 open_wait_ticks=1
+sample 23 worker 2 (pid 6): run_ticks=10 wait_ticks_total=30 wait_ticks_max=3 open_wait_ticks=0
+sample 24 worker 0 (pid 4): run_ticks=10 wait_ticks_total=28 wait_ticks_max=3 open_wait_ticks=2
+sample 24 worker 1 (pid 5): run_ticks=10 wait_ticks_total=29 wait_ticks_max=3 open_wait_ticks=1
+sample 24 worker 2 (pid 6): run_ticks=10 wait_ticks_total=30 wait_ticks_max=3 open_wait_ticks=0
+sample 25 worker 0 (pid 4): run_ticks=10 wait_ticks_total=28 wait_ticks_max=3 open_wait_ticks=2
+sample 25 worker 1 (pid 5): run_ticks=10 wait_ticks_total=29 wait_ticks_max=3 open_wait_ticks=1
+sample 25 worker 2 (pid 6): run_ticks=11 wait_ticks_total=33 wait_ticks_max=3 open_wait_ticks=0
+sample 26 worker 0 (pid 4): run_ticks=11 wait_ticks_total=31 wait_ticks_max=3 open_wait_ticks=2
+sample 26 worker 1 (pid 5): run_ticks=11 wait_ticks_total=32 wait_ticks_max=3 open_wait_ticks=1
+sample 26 worker 2 (pid 6): run_ticks=11 wait_ticks_total=33 wait_ticks_max=3 open_wait_ticks=0
+sample 27 worker 0 (pid 4): run_ticks=11 wait_ticks_total=31 wait_ticks_max=3 open_wait_ticks=2
+sample 27 worker 1 (pid 5): run_ticks=11 wait_ticks_total=32 wait_ticks_max=3 open_wait_ticks=1
+sample 27 worker 2 (pid 6): run_ticks=11 wait_ticks_total=33 wait_ticks_max=3 open_wait_ticks=0
+sample 28 worker 0 (pid 4): run_ticks=11 wait_ticks_total=31 wait_ticks_max=3 open_wait_ticks=2
+sample 28 worker 1 (pid 5): run_ticks=11 wait_ticks_total=32 wait_ticks_max=3 open_wait_ticks=1
+sample 28 worker 2 (pid 6): run_ticks=12 wait_ticks_total=36 wait_ticks_max=3 open_wait_ticks=0
+sample 29 worker 0 (pid 4): run_ticks=12 wait_ticks_total=34 wait_ticks_max=3 open_wait_ticks=2
+sample 29 worker 1 (pid 5): run_ticks=12 wait_ticks_total=35 wait_ticks_max=3 open_wait_ticks=1
+sample 29 worker 2 (pid 6): run_ticks=12 wait_ticks_total=36 wait_ticks_max=3 open_wait_ticks=0
+sample 30 worker 0 (pid 4): run_ticks=12 wait_ticks_total=34 wait_ticks_max=3 open_wait_ticks=2
+sample 30 worker 1 (pid 5): run_ticks=12 wait_ticks_total=35 wait_ticks_max=3 open_wait_ticks=1
+sample 30 worker 2 (pid 6): run_ticks=12 wait_ticks_total=36 wait_ticks_max=3 open_wait_ticks=0
+sample 31 worker 0 (pid 4): run_ticks=13 wait_ticks_total=37 wait_ticks_max=3 open_wait_ticks=2
+sample 31 worker 1 (pid 5): run_ticks=13 wait_ticks_total=38 wait_ticks_max=3 open_wait_ticks=1
+sample 31 worker 2 (pid 6): run_ticks=13 wait_ticks_total=39 wait_ticks_max=3 open_wait_ticks=0
+sample 32 worker 0 (pid 4): run_ticks=13 wait_ticks_total=37 wait_ticks_max=3 open_wait_ticks=2
+sample 32 worker 1 (pid 5): run_ticks=13 wait_ticks_total=38 wait_ticks_max=3 open_wait_ticks=1
+sample 32 worker 2 (pid 6): run_ticks=13 wait_ticks_total=39 wait_ticks_max=3 open_wait_ticks=0
+sample 33 worker 0 (pid 4): run_ticks=13 wait_ticks_total=37 wait_ticks_max=3 open_wait_ticks=2
+sample 33 worker 1 (pid 5): run_ticks=14 wait_ticks_total=41 wait_ticks_max=3 open_wait_ticks=1
+sample 33 worker 2 (pid 6): run_ticks=14 wait_ticks_total=42 wait_ticks_max=3 open_wait_ticks=0
+sample 34 worker 0 (pid 4): run_ticks=14 wait_ticks_total=40 wait_ticks_max=3 open_wait_ticks=2
+sample 34 worker 1 (pid 5): run_ticks=14 wait_ticks_total=41 wait_ticks_max=3 open_wait_ticks=1
+sample 34 worker 2 (pid 6): run_ticks=14 wait_ticks_total=42 wait_ticks_max=3 open_wait_ticks=0
+sample 35 worker 0 (pid 4): run_ticks=14 wait_ticks_total=40 wait_ticks_max=3 open_wait_ticks=2
+sample 35 worker 1 (pid 5): run_ticks=14 wait_ticks_total=41 wait_ticks_max=3 open_wait_ticks=1
+sample 35 worker 2 (pid 6): run_ticks=15 wait_ticks_total=45 wait_ticks_max=3 open_wait_ticks=0
+sample 36 worker 0 (pid 4): run_ticks=15 wait_ticks_total=43 wait_ticks_max=3 open_wait_ticks=2
+sample 36 worker 1 (pid 5): run_ticks=15 wait_ticks_total=44 wait_ticks_max=3 open_wait_ticks=1
+sample 36 worker 2 (pid 6): run_ticks=15 wait_ticks_total=45 wait_ticks_max=3 open_wait_ticks=0
+sample 37 worker 0 (pid 4): run_ticks=15 wait_ticks_total=43 wait_ticks_max=3 open_wait_ticks=2
+sample 37 worker 1 (pid 5): run_ticks=15 wait_ticks_total=44 wait_ticks_max=3 open_wait_ticks=1
+sample 37 worker 2 (pid 6): run_ticks=15 wait_ticks_total=45 wait_ticks_max=3 open_wait_ticks=0
+sample 38 worker 0 (pid 4): run_ticks=16 wait_ticks_total=46 wait_ticks_max=3 open_wait_ticks=2
+sample 38 worker 1 (pid 5): run_ticks=16 wait_ticks_total=47 wait_ticks_max=3 open_wait_ticks=1
+sample 38 worker 2 (pid 6): run_ticks=16 wait_ticks_total=48 wait_ticks_max=3 open_wait_ticks=0
+sample 39 worker 0 (pid 4): run_ticks=16 wait_ticks_total=46 wait_ticks_max=3 open_wait_ticks=2
+sample 39 worker 1 (pid 5): run_ticks=16 wait_ticks_total=47 wait_ticks_max=3 open_wait_ticks=1
+sample 39 worker 2 (pid 6): run_ticks=16 wait_ticks_total=48 wait_ticks_max=3 open_wait_ticks=0
+statstest: PASS -- open_wait_ticks was > 0 at least once, and run_ticks made progress (workers were actually running, not stuck)
+
+=== Analysis (Claude Code, 2026-09-12) ===
+Steady-state pattern (from sample ~5 onward) is a clean, deterministic
+staircase: worker0 open_wait_ticks=2, worker1=1, worker2=0, all three
+wait_ticks_max pinned at 3. This is exactly what a stable 4-participant
+1-tick round robin (worker0, worker1, worker2, sampler, repeating) predicts:
+each worker waits exactly 3 ticks (the other 3 participants' turns) between
+its own dispatches, and at the instant the sampler runs, worker0 has had 2
+of those 3 ticks elapse since becoming RUNNABLE (it ran first, longest ago),
+worker1 has had 1, and worker2 (ran immediately before the sampler) has had
+0 -- reproducing the exact "adjacent-to-sampler reads 0" finding from v1 of
+this test (2 workers, single target queried), but now alongside two other
+workers that clearly show open_wait_ticks > 0, proving the RUNNABLE-branch
+of sys_sched_stats() (kernel/sysproc.c) is correct and it was v1's specific
+adjacency that produced the all-zero result, not a code defect.
+
+Reviewed by: OpenAI Codex (headless `codex exec`, session 01a09020-a374-
+7460-9afc-6df24a133619). This is a record of the audit history, not a
+self-declared approval: see `agent-management/projects/xv6_os_project/
+DECISIONS.md` for the actual dated verdicts. As of this file's last edit,
+Codex's most recent verdict on the open_wait_ticks question specifically
+was that it is resolved with no remaining technical objection, but overall
+Implementation Gate closure was still `INSUFFICIENT_EVIDENCE` pending the
+real usertests transcript referenced above (not yet linked in an earlier
+revision of this file) -- do not treat this file alone as proof of a final
+`ACCEPTED`.

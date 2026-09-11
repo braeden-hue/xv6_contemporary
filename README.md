@@ -1,37 +1,43 @@
 # modern_xv6
 
-Experimental xv6-riscv fork for studying the cost of Modern C++ abstractions in a freestanding kernel environment.
+Experimental xv6-riscv fork studying Modern C++ abstraction costs and scheduling-policy trade-offs in a freestanding kernel.
 
-This project asks a narrow systems question: **can compile-time abstractions improve kernel structure without adding observable runtime cost in a hot path?** The current focus is scheduler policy abstraction with C++20/23 concepts and templates, followed by quantitative comparison using RISC-V cycle/instruction counters and generated assembly.
+The project follows two connected questions:
 
-The repository is based on MIT xv6-riscv. The original `mmap` work began as an operating-systems course assignment; the Modern C++ scheduler, measurement infrastructure, and related experiments are personal extensions.
+1. What code and runtime cost does compile-time policy abstraction produce?
+2. How do preemption rules affect latency, background progress, and CPU share?
+
+The repository is based on MIT xv6-riscv. The original `mmap` work began as an operating-systems course assignment; the Modern C++ scheduler, measurement infrastructure, priority-preemption research, and related experiments are personal extensions.
 
 ## Current Status
 
 | Area | Status | Current implementation |
 |---|---|---|
-| Scheduler abstraction | ✅ | `SchedulerPolicy` concept + templated shared dispatch path |
-| Round Robin | ✅ | Stateful RR policy using the last selected process index |
-| FCFS | ✅ | Selects the longest-waiting RUNNABLE process using `arrival_seq` |
-| CFS | 🚧 | In progress |
-| RISC-V counters | ✅ | `rdcycle` / `rdinstret` access enabled for upcoming measurements |
+| Scheduler architecture | ✅ | Compile-time policies with separate selection (`pick_next`) and preemption (`should_preempt`) interfaces |
+| Round Robin / FCFS | ✅ | Stateful RR and arrival-sequence-based FCFS selection |
+| Dispatch benchmark | ✅ | Static-template vs function-pointer dispatch measured, with disassembly analysis |
+| Priority-based preemption | ✅ | `PriorityPreempt<UseCounter>` + `setpriority`; initial workload comparison measured (pending independent reproduction, see below) |
+| Scheduler accounting | ✅ | `sched_stats` exposes per-process run ticks and runnable-wait accounting; automated regression test passing |
+| RISC-V counters | ✅ | `rdcycle` / `rdinstret` integrated into the benchmark infrastructure |
+| CFS | Deferred | Design only; intentionally deferred while the priority-preemption experiments take precedence (see `plan.md`) |
 | mmap C++ port | ✅ | Behavior-preserving port used to study stronger type checking |
-| Dispatch benchmark | 🚧 | Static-template vs runtime function-pointer comparison planned |
 
-## Scheduler: Policy vs. Mechanism
+## Scheduler Architecture
 
-The original xv6 scheduler keeps process selection and dispatch mechanics in the same control path. This fork separates them.
+The original xv6 scheduler keeps process selection and dispatch mechanics in the same control path. This fork separates two independent policy decisions:
 
-Scheduling policies expose a minimal interface constrained by a C++20 concept:
+- **Selection** (`pick_next(procs, n)`): which RUNNABLE process runs next.
+- **Preemption** (`should_preempt(p)`): whether the currently running process should yield.
+
+Shared dispatch code owns locking, the `RUNNABLE -> RUNNING` transition, and the context switch; a policy only answers those two questions.
 
 ```cpp
 template<typename P>
-concept SchedulerPolicy = requires(P policy, struct proc* procs, int n) {
+concept SchedulerPolicy = requires(P policy, struct proc* procs, int n, struct proc* running) {
     { policy.pick_next(procs, n) } -> std::same_as<struct proc*>;
+    { policy.should_preempt(running) } -> std::same_as<bool>;
 };
 ```
-
-The common dispatch path owns locking, the `RUNNABLE -> RUNNING` transition, and the context switch. The selected policy only decides which process should run next.
 
 ```cpp
 template<SchedulerPolicy P>
@@ -42,45 +48,46 @@ template<SchedulerPolicy P>
     ...
 }
 
-using ActivePolicy = RR;
+using ActivePolicy = PriorityPreempt<true>;
 ```
 
-This keeps policy selection at compile time rather than introducing a virtual interface into the scheduler path. RR and FCFS are implemented as separate policy types, while CFS is still under development.
-
-## Why Modern C++ in xv6?
-
-The goal is not to rewrite xv6 in C++, nor to assume that C++ is inherently faster than C. The project uses a small set of language features where they can express an OS design constraint more directly and then checks what the compiler actually produces.
-
-Three current examples are:
-
-- **Concepts + templates** for scheduler policy/mechanism separation.
-- **`constexpr` + `enum class`** for typed CSR configuration in early machine-mode setup.
-- **Brace initialization + range-based loops** in a behavior-preserving C++ port of `sys_mmap` to explore compile-time checking around kernel data structures.
+Policy selection stays at compile time rather than introducing a virtual interface into the scheduler hot path — `nm` on the built kernel shows no symbol for a policy that isn't the active one; an unused policy's code doesn't exist in the binary. RR, FCFS, and `PriorityPreempt<UseCounter>` are implemented as separate policy types; CFS is designed but deferred (see Current Status).
 
 The kernel remains freestanding: no exceptions, RTTI, or hosted C++ runtime is assumed.
 
-## Measurement Plan
+## Experiment 1: Dispatch Abstraction Cost
 
-The next experiment compares two scheduler-policy dispatch mechanisms under the same policy and workload:
+Compares compile-time template dispatch against runtime function-pointer dispatch for the same scheduling logic, under `CPUS=1` and `-icount shift=0` (deterministic instruction counting; see `docs/bench/`).
 
-1. compile-time template dispatch
-2. runtime function-pointer dispatch
+Under the recorded benchmark configuration, function-pointer dispatch retired 12 more instructions per call for a trivial O(1) body, and 15 more for the RR scan body once the process count was made opaque (`volatile`) to the compiler.
 
-Both variants will use the same compiler, optimization level, QEMU configuration, and scheduler policy. The comparison will use:
+An initial RR-body measurement showed the *static* version retiring 174 more instructions than the function-pointer version — the opposite of what the call-path numbers predicted. Disassembly traced this to GCC's strength-reduction of `% 64` into a software instruction sequence once inlining exposed the compile-time-constant process count (`NPROC=64`); the function-pointer version, unable to see that constant, emitted a single hardware `remw` instead and came out ahead by coincidence. Making the process count `volatile` (opaque to the compiler) removed the reversal, isolating the call-path comparison from that unrelated codegen effect.
 
-- retired instructions via `rdinstret`
-- cycle counts via `rdcycle`
-- generated RISC-V assembly / symbol inspection
+These results characterize the measured code paths and this exact compiler/optimization configuration; they are not a general claim that templates are always faster. Raw logs, objdump output, and reproduction commands: [`docs/bench/`](docs/bench/).
 
-The purpose is **not to assume that templates are faster**, but to determine whether this abstraction introduces observable cost in the scheduler hot path and to explain the generated code when the result differs from expectation.
+## Experiment 2: Priority-Based Preemption
 
-Measurement support is already wired into the kernel: `r_cycle()` and `r_instret()` read the corresponding CSRs, and machine-mode setup enables the counter bits needed for supervisor-mode access.
+With RR selection held as the baseline, `PriorityPreempt<UseCounter>` (`kernel/sched_priority.hpp`) changes only the preemption rule: a process declares itself latency-sensitive via the `setpriority` syscall (never inferred from run length), and a latency-sensitive process is never preempted by this policy while it holds the CPU.
+
+Initial reported measurements (`user/latencytest.c`): a latency-sensitive task B's p99 response time dropped from 19 to 8 ticks (target-miss rate 5%→0%), while four background CPU-bound tasks' completion time increased by roughly 2.3×. **These latency numbers are self-reported and not yet independently reproduced or archived as raw logs** — treat them as a preliminary result, not a validated benchmark.
+
+The follow-up work adds `sched_stats` (a new syscall) to measure each process's cumulative CPU ticks and RUNNABLE-wait ticks directly, including an in-progress wait at query time — making the A-task's progress (or lack of it) directly observable instead of inferred. This part *is* validated: `usertests -q` passes with the added accounting, and an automated test (`user/statstest.c`) confirms both the closed-interval accounting (exact match to the expected round-robin math) and the open-interval branch (a clean, predicted staircase across four competing processes). Raw logs: [`docs/bench/phase18b_usertests_raw_output.txt`](docs/bench/phase18b_usertests_raw_output.txt), [`docs/bench/phase18b_statstest_raw_output.txt`](docs/bench/phase18b_statstest_raw_output.txt).
+
+Accounting is tick-granularity only (a sub-tick run or wait segment can be missed or double-counted at a boundary) — this is a known, accepted limitation, not a hidden one.
+
+## Measurement and Validation
+
+- `usertests -q`: **PASS ALL TESTS** on every scheduler-affecting change (FCFS, RR, priority preemption, and the accounting instrumentation). Raw logs in `docs/bench/`.
+- `statstest`: automated regression test for the `sched_stats` accounting, no human-timing dependency. Raw log: `docs/bench/phase18b_statstest_raw_output.txt`.
+- Measurement conditions (compiler, `CPUS`, QEMU flags, `-icount`) are recorded alongside each raw log rather than asserted from memory.
+
+Development uses Claude Code and OpenAI Codex for implementation and independent code review. Across the scheduler-accounting work, five review rounds identified and corrected concrete defects — lock ordering/atomicity, 32-bit tick-counter wraparound, a query-time snapshot-ordering bug, and a missed final tick before process termination — before the work was accepted; the raw evidence behind that review is linked above.
 
 ## mmap Type-Safety Experiment
 
-`sys_mmap` was ported from C to C++ without intentionally changing its behavior. This experiment is separate from the scheduler performance work: its purpose is to examine where stronger compile-time checks are useful in low-level code.
+`sys_mmap` was ported from C to C++ without intentionally changing its behavior. This experiment is separate from the scheduler work: its purpose is to examine where stronger compile-time checks are useful in low-level code.
 
-The current port replaces selected C idioms with:
+The port replaces selected C idioms with:
 
 ```text
 PGROUNDUP macro            -> constexpr function
@@ -88,7 +95,7 @@ indexed VMA iteration      -> range-based for
 field-by-field assignment  -> designated initialization
 ```
 
-This part of the project is therefore about **type/structure safety**, not a performance claim.
+This part of the project is about **type/structure safety**, not a performance claim.
 
 ## Toolchain and Build
 
@@ -105,24 +112,28 @@ Run xv6:
 make qemu
 ```
 
+Run the scheduler-accounting regression test inside xv6:
+
+```
+$ usertests -q
+$ statstest
+```
+
 Run GCC static analysis for the C++ kernel files:
 
 ```bash
 make analyze
 ```
 
-The current Makefile also emits disassembly and symbol files for the kernel, which will be used for the dispatch experiment.
+The Makefile also emits disassembly and symbol files for the kernel, used for the dispatch experiment above.
 
-## Roadmap
+## Next Steps
 
-Near-term work is intentionally limited to validating the scheduler experiment before expanding the project further:
-
-- complete CFS integration
-- implement the function-pointer baseline
-- collect `rdcycle` / `rdinstret` measurements
-- compare generated RISC-V code and report the result
-
-Longer development notes and discarded design ideas are kept in [`plan.md`](plan.md); they should not be interpreted as completed features.
+- Independently reproduce and archive the priority-preemption latency results (Experiment 2) as raw logs.
+- Measure the linear-scan `PriorityPreempt<false>` baseline against the counter-based variant to complete the decision-cost comparison.
+- Reproduce a minimal starvation scenario for latency-sensitive processes and evaluate a bounded execution budget as a fix.
+- Use the CPU-share / runnable-wait measurements from `sched_stats` to evaluate future budget/aging policy changes.
+- Revisit CFS and a broader selection × preemption comparison matrix after the above.
 
 ## Base Project and License
 

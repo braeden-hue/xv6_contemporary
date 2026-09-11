@@ -1,0 +1,13 @@
+
+xv6 kernel is booting
+
+[dispatch] trivial static total=404 per_call=2
+[dispatch] trivial fnptr  total=2807 per_call=14
+[dispatch] call-path delta (fnptr - static), trivial body, per_call=12
+[dispatch] RR static total=141408 per_call=707
+[dispatch] RR fnptr  total=106607 per_call=533
+[dispatch] RR total delta (fnptr - static), per_call=-174
+[dispatch] RR static (opaque n) total=103411 per_call=517
+[dispatch] RR opaque-n delta vs fnptr, per_call=15 (isolates call-path cost once the constant-n codegen confound is removed)
+init: starting sh
+$ qemu-system-riscv64: terminating on signal 15 from pid 82422 (timeout)

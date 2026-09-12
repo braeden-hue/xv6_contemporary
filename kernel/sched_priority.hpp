@@ -72,3 +72,28 @@ struct PriorityPreempt {
         return running->priority != (int)Priority::LatencySensitive;
     }
 };
+
+// Mixed Workload Response-Time Experiment (design/mixed_workload_experiment/, rev5, ACCEPTED
+// 2026-09-12): ablation policy isolating *selection* from *protection*. PriorityPreempt above
+// changes both at once (LatencySensitive-first reordering in pick_next() AND never-yield
+// protection in should_preempt()), so an observed response-time improvement under it can't be
+// attributed to either mechanism alone. PrioritySelectOnly keeps the same reordering (delegated
+// to a PriorityPreempt<UseCounter> member, not duplicated -- same pick_next() logic and `last`
+// state, unmodified) but always yields every tick, exactly like RR/Normal under PriorityPreempt.
+// Comparing RR vs PrioritySelectOnly vs PriorityPreempt on the same workload (user/mixbench.c)
+// isolates each mechanism's separate contribution.
+template<bool UseCounter>
+struct PrioritySelectOnly {
+    PriorityPreempt<UseCounter> inner;   // reused verbatim, not reimplemented
+
+    struct proc* pick_next(struct proc* procs, int n) {
+        return inner.pick_next(procs, n);
+    }
+
+    // The only behavioral difference from PriorityPreempt: no non-preemption
+    // protection for LatencySensitive. Every proc yields every tick, same as
+    // plain RR -- selection reordering is the only effect left active.
+    bool should_preempt(struct proc*) {
+        return true;
+    }
+};

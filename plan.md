@@ -6,11 +6,12 @@
 |---|---|---|
 | 0 | ✅ 완료 | `mcounteren` CSR 활성화 + `r_cycle`/`r_instret` 추가로 이후 모든 실측의 기반을 만든다 |
 | 0.5 | ✅ 완료 | GCC 내장 `-fanalyzer`를 정적 분석으로 채택(설치 불필요, 기존 코드 클린 확인), C++20 모듈은 이 툴체인 미지원으로 실측 후 기각 |
-| 1 | 🟡 FCFS+RR 완료, CFS 남음 | RR/FCFS/CFS를 concepts+템플릿 정적 디스패치로 구현해 함수포인터 대비 명령어 수 감소를 실측 증명한다 — 이 프로젝트의 핵심 |
+| 1 | 🟡 FCFS+RR 완료 | RR/FCFS를 concepts+템플릿 정적 디스패치로 구현해 함수포인터 대비 명령어 수 감소를 실측 증명한다 — 이 프로젝트의 핵심 |
 | 1.5 | ✅ 완료 | `sys_mmap`을 C++로 포팅해 매크로/필드순서/인덱스루프 버그를 컴파일 에러로 격상시킨다 |
+| 1.8 | 🟡 설계 확정(범위 재조정), 구현 시작 전 | **현재 연구 목표.** RR 대비 우선순위 기반 선점 정책 하나만 비교 — 긴 배경계산 A + 지연민감 요청 B 두 종류로 좁힘. 목표 응답시간 초과율·A의 진행·추가 판단비용을 측정 |
 | 1.6 | 부분 완료(설계만) | `ErrorOr<T>`/`TRY()`로 균일한 에러 전파를 만든다 (`RefPtr`을 구조체 필드로 넣는 안은 기각됨) |
 | 1.7 | 미착수 (설계만) | Stroustrup 2025 논문의 `Number<T>` 패턴을 이식해 Phase 1.5에서 우연히 잡은 narrowing 버그를 프로젝트 전체 차원에서 체계적으로 방지한다 |
-| 2 | 🟡 설계 확정, 구현 남음 | CFS 정렬 자료구조를 힙 할당 없는 인트루시브 템플릿 트리로 구현한다 — `project1-braeden-hue`의 검증된 RB tree를 락 추가해서 포팅 |
+| 2 | ⏸️ 보류 (설계만, 의무 아님) | CFS 정렬 자료구조를 힙 할당 없는 인트루시브 템플릿 트리로 구현한다 — Phase 1.8이 RR 대비 단일 비교로 범위를 좁히면서 후순위로 밀림. 설계(`project1-braeden-hue`의 RB tree 포팅안)는 보존 |
 | 2.5 | 미착수 (Phase 2 선행) | Phase 2 트리를 증강해서 mmap 주소충돌 회피를 O(N²)→O(log N)으로 개선한다 (단, `NVMA=16`이라 실측 이득은 제한적) |
 | 3 | 미착수 | CAS 기반 락-프리 상태전이 + xv6 `sleep`/`wakeup`을 결합해 broadcast-wake 비효율을 줄인다 |
 | 4 | 미착수 | `std::atomic` refcount로 COW fork의 락 세분화를 증명한다 — 정적 디스패치와 무관한 별도 동시성 축 |
@@ -72,13 +73,19 @@ w_mcounteren(r_mcounteren() | raw(Mcounteren::CY | Mcounteren::TM | Mcounteren::
 
 전체 커널 clean rebuild 성공, `nm`으로 `start`/`timerinit` 심볼이 mangling 없이 노출됨 확인, `mmaptest` 재통과로 부팅/타이머 회귀 없음 확인. **추가로 Phase 0의 진짜 목적(S-mode에서 `cycle`/`instret`을 실제로 읽을 수 있는가)까지 검증**: `kernel/main.c`에 `r_cycle()`/`r_instret()`을 부팅 배너에서 호출하는 임시 코드를 넣어 QEMU로 실행 — 트랩/패닉 없이 정상 출력됨을 확인하고 원복(`[phase0 check] r_cycle=... r_instret=...` 출력, 이후 정상 부팅 계속됨).
 
-측정 규칙 확정(이후 모든 Phase에 동일 적용, Phase 1 RR/CFS 벤치마크에서 실제로 담을 예정 — 인프라는 준비됐고 하니스는 아직):
+측정 규칙 확정(이후 모든 Phase에 동일 적용):
 - 실제 인터럽트 핸들러 통째로 재지 말고 **디스패치 호출 지점만** 분리한 타이트 루프로 N회(수만~수십만) 반복
 - 루프는 `intr_off()`/`intr_on()`으로 감싸 인터럽트 잡음 차단
 - **첫 반복 폐기** (QEMU TCG의 TB 최초 번역 비용이 섞임)
 - 평균이 아니라 **중앙값 + 최솟값** 리포트
 - `rdcycle`과 `rdinstret`을 항상 같이 재고, 둘이 거의 같게 나오는 걸 "QEMU TCG는 타이밍 모델이 없다"는 확인으로 명시 (성공적 측정 실패가 아님)
 - 정적 증거는 `objdump -d`로 디스패치 호출 지점 diff (간접 `ld`+`jalr` vs 직접 `jal`)
+
+**✅ `rdinstret` 캘리브레이션 완료, 중대 발견 (2026-09-XX, [kernel/bench.cpp](kernel/bench.cpp)):** 정확히 `1+2n` 명령어를 실행하는 타이트 루프(`mv`+`n`회의 `addi`/`bnez`)로 `rdinstret` 델타를 실측했다.
+- **기본 QEMU 모드(`-icount` 없음)에서는 `rdinstret`이 신뢰 불가능하다.** 같은 코드를 20번 반복 실행해도 기댓값(2001)으로 수렴하지 않고 **약 1.8배(3656~3688)에서 플래토**를 형성한다. `objdump`로 생성된 어셈블리가 `rdinstret`/`mv`/`addi`/`bnez`/`rdinstret`만 정확히 있고 다른 메모리 접근이 안 끼어있음을 확인했으므로(코드 버그 아님), **QEMU TCG의 기본 `instret` 구현이 "실제 retired 명령어 1개당 1 증가"가 아니라 다른 단위(TCG 내부 micro-op 추정)로 세고 있다는 뜻**이다 — 팀원이 지적한 "카운터 의미를 확인해야 한다"가 실측으로 확인된 사례.
+- **`-icount shift=0`로 부팅하면 완벽하게 정확해진다.** 20번 반복 전부 오차 없이(`+1`의 상수 오프셋만, 측정 경계 자체에서 나오는 것으로 설명 가능) 정확히 일치했고, `slope` 체크(1000→2000, 2000→4000)도 정확히 2000/4000으로 맞았다.
+- **결론: 이후 모든 `rdcycle`/`rdinstret` 실험은 `-icount shift=0`로 QEMU를 부팅해야 한다.** 기본 `make qemu`(Phase 0의 CY/IR 활성화 sanity check 등)는 "트랩 없이 읽힌다"는 확인에는 문제없지만, 정확한 수치 비교에는 부적합하다는 게 이번에 새로 밝혀졌다.
+- 부팅 커맨드: `qemu-system-riscv64 ... -icount shift=0 ...` (`Makefile`의 `qemu` 타깃엔 아직 반영 안 함 — 벤치마크 전용 실행 시 수동으로 추가)
 
 ### Phase 0.5 — 정적 분석 인프라 (`-fanalyzer` 채택, Modules는 실측 후 기각)
 
@@ -225,7 +232,41 @@ extern "C" [[noreturn]] void scheduler_dispatch(void)
 
 전체 커널 clean rebuild 성공(FCFS 단독일 때, 그리고 RR로 재구성한 뒤 다시), `nm`으로 `scheduler_dispatch`/`mark_runnable` 심볼 확인, **`usertests -q` 전체 통과(`PASS ALL TESTS`)**와 `mmaptest` 전체 통과를 FCFS/RR 각각에서 QEMU 재확인 — fork/exit/wait/pipe/sleep/wakeup/kill처럼 스케줄러를 강하게 타는 경로가 두 정책 모두에서 문제없이 동작함을 실측 확인. `nm`으로 바이너리엔 `FCFS` 관련 심볼이 전혀 없고 `RR::pick_next`조차 `dispatch<RR>`에 완전히 인라인된 것도 확인 — "안 쓰는 정책은 코드생성이 아예 안 된다"는 실측 증거. 다음은 CFS(정책 인터페이스 + Phase 2 트리 결합) → Phase 0의 rdcycle/rdinstret 벤치마크로 FCFS/RR/CFS 실측 비교.
 
-**Before (원본, [kernel/proc.c:462](kernel/proc.c:462)이었던 지점):**
+**✅ 정적(템플릿) vs 함수포인터 디스패치 비용 실측 완료 (2026-09-11, [kernel/bench.cpp](kernel/bench.cpp)):**
+
+*Baseline 설계(사용자 확정):* C++ 언어 자체는 고정하고 디스패치 메커니즘만 바꾼다 — `struct RR`(정적/템플릿, `sched_rr.hpp`와 동일 본체)와 동일 로직을 `static`(내부 링크) C++ 함수로도 작성해 `volatile` 함수 포인터(`pick_next_fn volatile g_rr_fn`)로 호출한다. `volatile`이 핵심: 단일 대입되는 전역 함수 포인터는 `-O`가 역가상화(devirtualize)해서 직접 호출로 되돌리는 전형적 패턴이라, `volatile`로 매번 실제 재적재+`jalr`을 강제했다(그렇지 않으면 fnptr 쪽도 인라인되어 비교 자체가 무의미해짐). 두 메커니즘 모두 동일한 합성 `bench_procs[64]` 배열(전역 `proc[]`는 건드리지 않음), 동일 초기 상태(`last=-1`, 마지막 슬롯만 RUNNABLE → 매 호출 64칸 풀스캔이 되는 결정론적 최악 경우)에서 실행했고, 측정 구간은 `r_instret()` 전후로 `pick_next()` 호출만 감싸 `dispatch()` 루프 전체가 아닌 순수 호출만 격리했다. `CPUS=1`, `-icount shift=0`(§0의 실측 검증된 규칙)로 부팅.
+
+정책 본체와 호출 경로 비용을 분리하기 위해 O(1) trivial 본체(`return &procs[0];`)도 같은 두 메커니즘으로 먼저 측정했다. 200회 반복, 결과(instret/call):
+
+| 실험 | static(템플릿) | fnptr(간접) | 차이(fnptr − static) |
+|---|---|---|---|
+| trivial 본체 (O(1)) | 2 | 14 | **+12** |
+| RR 본체 (O(64) 스캔, n=64 상수) | 707 | 533 | **−174** (역전!) |
+| RR 본체, n을 `volatile int`로 불투명화 | 517 | 533 | **+15** |
+
+*trivial 본체:* `objdump`로 확인한 결과 static 루프는 몸체가 **완전히 사라지고**(순수 함수 + 상태 불변 → 컴파일러가 계산을 통째로 소거, 루프 제어만 남음 — 2 instret/call은 `addiw`+`bnez` 그 자체) fnptr 루프는 매 반복 `ld`(포인터 재적재)+`mv`+`mv`+`jalr`(간접 호출) 후 콜리(callee)가 실제로 주소를 계산해 반환 — 간접 호출이 어셈블리에 실질적으로 남아있음을 확인. **정적 디스패치의 "호출 경로" 비용은 사실상 0, 함수 포인터는 call당 +12 instret의 고정 세금.**
+
+*RR 본체 역전의 원인 (실측·objdump로 규명):* static 버전은 `dispatch<RR>()`와 동일하게 `pick_next(bench_procs, BENCH_NPROC)`을 호출하는데 `BENCH_NPROC`이 컴파일타임 상수(64)라 GCC가 인라인 후 `(last+i) % 64`의 나눗셈을 **부호 있는 정수의 2의 거듭제곱 나눗셈용 소프트웨어 시퀀스**(`sraiw`+`srliw`+`addw`+`andi`+`subw`, 5개 명령)로 강도 감소(strength reduction)시켰다. 반면 `fnptr_rr_pick_next`는 독립 함수라 `n`이 런타임 매개변수로 남고, GCC는 그냥 **하드웨어 `remw`(M-extension) 명령 1개**를 냈다 — `-O`(=`-O1`) 수준에서 이 상수-나눗셈 강도감소가 오히려 하드웨어 나머지 연산보다 느린, 실제로 손해인 케이스였다. 이건 정적 디스패치의 결함이 아니라 **"인라인이 컴파일러에게 n=64라는 걸 보여줘서 생긴 별개의 코드생성 효과"**임을 증명하기 위해 세 번째 측정을 추가했다: `n`을 `volatile int` 전역으로 읽어 상수 전파를 원천 차단하면(그래도 여전히 정적/인라인 디스패치) static이 다시 517 instret/call로 fnptr(533)을 앞섰고, 그 격차(+15/call)는 trivial 본체의 순수 호출-경로 세금(+12/call)과 거의 일치한다.
+
+**결론:** 호출 경로(call path) 비용은 정적 디스패치가 함수 포인터 대비 안정적으로 약 12~15 instret/call 더 싸다(간접 적재+`jalr`+콜리 프롤로그/에필로그 vs 완전 소거 또는 직접 인라인). 정책 본체(policy body) 비용 자체는 두 메커니즘이 동일한 로직을 실행하면 동일해야 하며, 실제로 `n`의 상수성을 통제하면 동일한 결과가 나온다 — 처음 관찰된 "정적 버전이 174 instret/call 더 느림"은 디스패치 메커니즘의 차이가 아니라 **GCC `-O1`이 인라인된 상수-나눗셈 강도감소를 하드웨어 `remw`보다 손해 보는 방향으로 선택한 컴파일러 특이 현상**이었다 — 이것도 실측 없이는 놓쳤을 정직한 결과라 그대로 남긴다. `dispatch<P>()`가 `NPROC`(매크로 상수)로 `pick_next`를 호출하는 실제 프로덕션 코드에서도 이 강도감소가 동일하게 일어나므로, 실서비스 빌드에도 그대로 적용되는 관찰이다(벤치마크만의 인공물이 아님).
+
+**⚠️ 부수적으로 발견·수정한 실제 커널 버그 (인터럽트 상태 관리):** 위 벤치마크를 `main()`에 처음 연결했을 때, 출력은 정상적으로 찍히는데 그 직후 `kinit()` 어디선가 **패닉도 없이 조용히 멈추는** 문제가 발생했다. 이분 탐색(각 측정 호출을 하나씩 빼며 재현)으로 원인을 `run_dispatch_bench()`가 측정 구간을 감싸려고 넣었던 `intr_off()`/`intr_on()` 호출 자체로 좁혔다 — 측정 로직(트리비얼/RR 본체, 리셋, 루프)은 전혀 무관했고, `intr_off(); intr_on();`만 남기고 나머지를 다 지워도 재현됐다.
+
+원인: [kernel/start.cpp](kernel/start.cpp)의 `timerinit()`은 `main()`이 시작되기 전 **M-mode에서 이미** `sie.STIE`/`sie.SEIE`를 언마스크하고 첫 타이머 인터럽트를 `w_stimecmp(r_time()+1000000)`로 예약해 둔다. 반면 `stvec`(트랩 벡터)는 `trapinithart()`가 설치하는데, 이 함수는 `main()`에서 `kinit()` **이후에** 호출된다. 즉 `main()` 진입 시점엔 개별 인터럽트 소스는 이미 언마스크되어 있고 타이머도 이미 예약되어 있지만, `sstatus.SIE`(전역 인터럽트 허용 비트)만 0이라 실제로는 아무 트랩도 발생하지 않는 안전한 상태다. 여기서 `run_dispatch_bench()`가 (측정 구간을 보호한다는 명목으로) `intr_on()`을 호출해 `sstatus.SIE`를 1로 올리면, 이미 예약된 타이머 인터럽트가 실제로 발동할 수 있게 되고, 발동 시점엔 `stvec`이 아직 미설정(쓰레기 값)이라 **CPU가 정의되지 않은 주소로 트랩되어 그대로 멈춘다** — 진짜 트랩 핸들러를 거치지 않으므로 `panic()` 출력조차 없다.
+
+**수정:** `run_dispatch_bench()`/`run_calibration()` 양쪽에서 `intr_off()`/`intr_on()` 호출을 완전히 제거했다. 이 함수들은 `trapinit()` 이전에만 호출되므로 `sstatus.SIE`는 애초에 이미 0(비활성)이라 굳이 끌 필요가 없고, 켜는 순간이 바로 버그였으므로 켜지 않는 게 맞는 수정이다. 수정 후 벤치마크 수치는 완전히 동일하게 재현됐고(측정 로직 자체는 건드리지 않았으므로 당연함), `-icount shift=0` 부팅에서도 `usertests -q`/`mmaptest`까지 문제없이 이어짐을 확인했다. **교훈: `trapinithart()` 이전 구간에서 절대 `intr_on()`을 호출하지 않는다** — 이후 Phase(CFS 등)에서 부팅 초기에 측정/디버그 코드를 넣을 때도 이 불변조건을 지켜야 한다.
+
+**재현 정보 (2026-09-11 최종 확정):**
+- 베이스 커밋: `780da055fab1dd1adee2b8e2f188ddb0c7326642`("Modern C++ scheduler policies (FCFS/RR, CFS in progress) + mmap C++ port") 위에 이 세션의 변경(`kernel/bench.cpp` 신규, `kernel/main.c`/`kernel/riscv.h`/`Makefile`/`plan.md` 수정)이 아직 커밋되지 않은 상태로 얹혀 있음.
+- 컴파일러: `riscv64-linux-gnu-g++-14`/`riscv64-linux-gnu-gcc-14` (Ubuntu 14.2.0-4ubuntu2~24.04.1) 14.2.0. 호스트: Ubuntu 24.04.4 LTS.
+- QEMU: `QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.16)`.
+- 디스패치 벤치마크(신뢰 가능한 수치) 부팅 옵션: `-machine virt -bios none -kernel kernel/kernel -m 128M -smp 1 -nographic -icount shift=0 -global virtio-mmio.force-legacy=false -drive file=fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0` (CPUS=1 고정 — §0에서 확정한 대로 `-icount shift=0` 없이는 `instret`이 부정확함).
+- 회귀 검증(`usertests -q`/`mmaptest`) 부팅 옵션: 위와 동일하되 `-smp 3 -icount` 없음(기본 TCG) — 기능 검증 목적이라 타이밍 정확도는 불필요, 기본 QEMUOPTS(Makefile `qemu` 타깃) 그대로.
+- 반복 횟수: 각 측정 조건(`trivial static/fnptr`, `RR static/fnptr`(상수 n), `RR static`(opaque n))마다 `pick_next()` 200회(`BENCH_REPS`) 연속 호출을 한 블록으로 삼아 `r_instret()` 델타/200으로 call당 평균을 냄 — calibration(§0)에서 이미 `-icount shift=0`가 완전히 결정론적임을 20/20 반복으로 검증해 두었으므로, 이 본실험은 조건당 1블록만 측정했다(다회 반복 중앙값 방식은 미적용). 실제로 CPUS=1/`-icount shift=0` 조합으로 동일 바이너리를 두 번 독립 실행한 결과가 모든 자리수까지 완전히 일치함을 재확인함(결정론 재확인, [docs/bench/dispatch_bench_icount_cpus1.txt](docs/bench/dispatch_bench_icount_cpus1.txt)).
+- 원시 출력 보존: [docs/bench/dispatch_bench_icount_cpus1.txt](docs/bench/dispatch_bench_icount_cpus1.txt)(디스패치 벤치마크, CPUS=1/`-icount shift=0`), [docs/bench/usertests_raw_output.txt](docs/bench/usertests_raw_output.txt)(`usertests -q` 전체 원시 로그, CPUS=3/기본 TCG), [docs/bench/asm_run_dispatch_bench.txt](docs/bench/asm_run_dispatch_bench.txt)(`run_dispatch_bench()` 전체 역어셈블), [docs/bench/asm_fnptr_rr_pick_next.txt](docs/bench/asm_fnptr_rr_pick_next.txt)(독립 함수로 컴파일된 `fnptr_rr_pick_next` 역어셈블).
+- **`usertests -q` 최종 결과: `PASS ALL TESTS`, 64개 서브테스트 전부 PASS, FAIL 0.** 로그 중간의 `usertrap(): unexpected scause 0xf ...` 다수는 xv6 스톡 `usertests`가 의도적으로 페이지 폴트를 유발해 커널 반응을 확인하는 서브테스트(`sbrkfault` 계열)의 정상 진단 출력이며 실패가 아니다(`mmaptest`에서 이미 본 것과 동일한 패턴). `mmaptest`도 별도 실행에서 `mmaptest: all tests succeeded`로 전체 통과 확인.
+
+
 ```c
 for(p = proc; p < &proc[NPROC]; p++) {
   acquire(&p->lock);
@@ -323,6 +364,115 @@ extern "C" void policy_on_runnable(struct proc* p, int reason) {
 **락 순서 (데드락 방지, 반드시 지킬 것):** `mark_runnable()`은 호출 시점에 이미 `p->lock`을 쥔 채로 `policy_on_runnable()`→`on_runnable()`→`tree.insert()`(트리 락 획득)로 이어진다 — 즉 **`p->lock`이 항상 바깥, 트리 락이 항상 안쪽**이다. 반대로 `pick_next()`(→`tree.pop_first()`)는 `dispatch()`에서 어떤 `p->lock`도 쥐지 않은 상태로 호출되고, 트리 락을 얻었다 완전히 반납한 뒤에야 `next->lock`을 새로 잡는다 — 트리 락과 `next->lock`이 절대 동시에 물리지 않는다. 이 순서가 어긋나면(트리 락을 쥔 채로 `p->lock`을 새로 잡는 경로가 하나라도 생기면) 데드락 가능성이 생기므로, CFS 구현 시 이 불변조건을 코드 리뷰 체크리스트에 넣는다.
 
 **CFS 관련 Phase는 순서상 Phase 2(트리 템플릿 완성) 이후에 온다** — 지금 이 섹션은 설계만 확정된 상태, 구현은 Phase 2 완료 후 진행.
+
+### Phase 1.8 — 우선순위 기반 선점: 지연 민감 작업 보호 (2026-09-12 범위 재조정)
+
+**목표(재조정):** "모던 C++로 실행 정책과 선점 조건을 정적으로 구성하는 구조를 만들고, 지연 민감 작업을 보호하는 기능의 추가 비용을 검증한다." CFS/RBTree/2×3 조합 계획은 **보류**(설계는 위 Phase 2에 남겨둠, 의무 아님) — 팀원 피드백대로 "어떤 스케줄러가 좋은가"로 중심이 옮겨간 것을 되돌려, RR 기준선 대비 **우선순위 기반 선점 정책 하나만** 비교한다. 작업 길이와 긴급성은 별개 정보이므로, 긴급성은 burst 길이로 추론하지 않고 프로세스가 명시적으로 선언한다.
+
+**두 작업 종류만 사용:** A(백그라운드 긴 계산, 여러 개), B(응답시간 목표가 있는 지연 민감 요청). A가 실행 중일 때 B가 도착하면 즉시 넘겨받는지가 핵심 질문.
+
+**RTOS의 인지/판단/전환 3단계와 xv6 매핑:**
+- **인지**: B가 RUNNABLE이 됐다는 걸 언제 아는가 — 이번 범위에서는 **tick 단위로만** 인지한다(기존 [kernel/trap.c:94](kernel/trap.c:94) 타이머 훅 재사용). 즉 인지 지연의 상한은 tick 주기 하나 — 이벤트 즉시 재스케줄(wakeup 시점에 바로 확인)은 범위 밖, 향후 과제로 명시.
+- **판단**: `pick_next()`가 RUNNABLE 중 `Priority::LatencySensitive`를 최우선으로 고르고(동순위는 RR), 없을 때만 Normal 중 RR. `should_preempt(running)`은 **Normal이면 RR과 동일하게 매 tick 무조건 true**(중요한 정정, 아래 참고), LatencySensitive면 false(끊지 않고 끝까지 돌림).
+- **전환**: xv6은 이미 안전하다 — 강제 선점은 `usertrap()`의 유저모드 복귀 지점 한 곳에서만 일어나고 커널 코드는 절대 도중에 끊기지 않는다. 새로 만들 것 없음, 구조적으로 이미 만족됨(Adios가 IPI를 따로 만들어야 했던 것과 대비되는 지점).
+
+**새 POD 필드(`kernel/proc.h`):** `int priority;` (0=Normal, 1=LatencySensitive) — 명시적 syscall로 설정(추론 금지).
+
+**정책 (`kernel/sched_priority.hpp`, concept은 기존 `pick_next`+`should_preempt` 그대로 재사용):**
+```cpp
+enum class Priority : int { Normal = 0, LatencySensitive = 1 };
+
+template<bool UseCounter>
+struct PriorityPreempt {
+    int last = -1;
+    struct proc* pick_next(struct proc* procs, int n) {
+        // g_ls_runnable_count: O(1)로 "1차 스캔이 애초에 의미 있는지" 확인.
+        // UseCounter=false는 이 단축 없이 매번 1차 스캔을 강행하는 "멍청한"
+        // 대조군 -- 판단비용 비교(④)는 여기서 일어난다.
+        bool maybe_ls = UseCounter ? (g_ls_runnable_count > 0) : true;
+        if (maybe_ls) {
+            for (int i = 1; i <= n; i++) {                   // 1순위: LatencySensitive
+                int idx = (last + i) % n; struct proc* p = &procs[idx];
+                if (p->state == RUNNABLE && p->priority == (int)Priority::LatencySensitive)
+                    { last = idx; return p; }
+            }
+        }
+        for (int i = 1; i <= n; i++) {                        // 2순위: Normal, RR
+            int idx = (last + i) % n; struct proc* p = &procs[idx];
+            if (p->state == RUNNABLE) { last = idx; return p; }
+        }
+        return nullptr;
+    }
+    // Normal은 RR과 완전히 동일하게 매 tick 무조건 양보 -- 우선순위 메커니즘의
+    // 효과는 전부 위 pick_next()의 재정렬에서 나오고, should_preempt()는
+    // Normal끼리의 기본 공정성(타임슬라이싱)을 절대 건드리지 않는다.
+    // LatencySensitive는 끊지 않고 끝까지 돌림(규칙 1).
+    bool should_preempt(struct proc* running) {
+        return running->priority != (int)Priority::LatencySensitive;
+    }
+};
+```
+
+**⚠️ Step 2에서 발견·수정한 실제 설계 버그:** 최초 구현은 `should_preempt()`가 Normal에 대해 `g_ls_runnable_count > 0`을 확인했다 — "LatencySensitive가 없으면 양보 안 함"이라는 뜻인데, 아직 아무도 `priority=1`을 쓰지 않는 상태(syscall 미구현)에서는 이 카운터가 항상 0이라 **Normal 프로세스가 영원히 tick 양보를 안 하게 되는** 실제 회귀였다. `usertests -q`의 `test preempt`(동일 우선순위 CPU-bound 자식들의 타임슬라이싱을 검증)가 정확히 이 지점에서 멈춰 잡아냈다. 교훈: "지연 민감 작업을 보호할 이유가 없다"와 "선점할 이유가 아예 없다"를 혼동하면 안 된다 — 같은 우선순위끼리의 기본 공정성은 우선순위 메커니즘과 무관하게 항상 보장돼야 한다. 수정 후 Normal의 `should_preempt()`는 RR과 완전히 동일(무조건 true)해졌고, O(1)/O(N) 판단비용 비교는 `should_preempt()`가 아니라 `pick_next()`의 1차 스캔 단축 여부로 옮겼다 — 이 위치가 실제로 의미 있는 차이를 만드는 유일한 지점이기 때문(Step 2 재검증: `usertests -q` PASS ALL TESTS, `mmaptest` all tests succeeded).
+
+**측정 지표 (핵심 결과, `instret/call`에서 여기로 이동):**
+1. B의 응답시간 분포(P50/P99) **+ 목표 응답시간 초과 비율**(단일 P99보다 RTOS 관점에 맞음)
+2. A의 진행 — 완료시간(끝난다면) 및 고정 구간 내 실제 받은 CPU tick 수(굶는지 관찰 — **RR과 달리 이 정책은 A의 실행 기회를 구조적으로 보장하지 않는다, 의도적 관찰 대상**)
+3. 추가 판단비용 + 문맥전환 횟수 — `UseCounter=true/false` 두 빌드를 오늘 확립한 `-icount shift=0` + `r_instret()` 기법으로 비교(오늘 실험의 직접 연장선)
+
+**C++ 요소:** concept(정책 인터페이스 검사), `if constexpr`(기능 on/off에 따라 관련 코드를 컴파일 단계에서 제외 — 오늘 `nm`으로 이미 증명한 "안 쓰는 정책은 코드생성 자체가 없다"의 연장), 단위 혼동 방지용 강타입(tick 기반 응답시간 값과 이번 세션에서 다뤘던 cycle/instret 값을 타입으로 구분). **다만 concept이 선점 안전성이나 데드라인 달성 자체를 증명해주진 않는다 — 연구 성공 기준은 문법 사용 여부가 아니라 실제 대기 감소 여부.**
+
+**한계(미리 명시):** hard real-time 보장을 주장하지 않는다 — "긴 CPU 작업이 섞일 때 지연 민감 작업의 목표 시간 초과율을 줄이는가"까지만. 인지 단계를 tick 단위로 좁혔으므로 tick 주기 자체가 응답시간의 하한으로 섞여 들어간다(결과 해석 시 분리해서 보고). A의 starvation 가능성은 우선순위 역전 방지(aging 등) 없이 그대로 관찰한다 — 필요하면 이후 과제.
+
+**구현 순서(각 단계 `usertests -q`/`mmaptest` 회귀 확인):**
+1. ✅ `priority` 필드(`kernel/proc.h`) + concept 확장(`should_preempt`) + trap.c 훅([kernel/trap.c:94](kernel/trap.c:94), usertrap()만). RR은 `should_preempt` 항상 true라 행동 변화 0인 순수 리팩터 — `usertests -q` PASS ALL TESTS, `mmaptest` all tests succeeded로 확인.
+2. ✅ `PriorityPreempt<true>` 추가(`g_ls_runnable_count`는 `mark_runnable()`/`dispatch()`에 직접 증감 — `RunnableReason` 일반화는 필요 없어서 안 씀), `ActivePolicy`로 전환해 빌드/부팅 확인. **버그 1건 발견·수정**(위 참고) 후 재검증 완료.
+3. ✅ `user/latencytest.c`(A 4개 백그라운드 + B 20라운드, `setpriority` syscall 신규 추가) 작성, RR vs `PriorityPreempt<true>` 측정 완료 — 결과는 아래.
+4. `PriorityPreempt<false>`(O(N))로 판단비용만 재측정, 문맥전환 횟수 계측 추가.
+
+**⚠️ Step 3 최초 측정 (아래 v2로 대체됨 — `wait()` 오회수 버그로 15~20라운드 데이터 오염, 원인은 바로 아래 결함 1번 참고):**
+
+| | RR (기준선) | `PriorityPreempt<true>` |
+|---|---|---|
+| B 응답시간(tick, 정렬) | `0 0 0 0 3 3 4 4 4 4 4 4 9 12 13 19 19 19 19 24` | `7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 8` |
+| p50 / p99 | 4 / **24** | **7** / 8 |
+| 목표(15tick) 초과율 | **5/20 (25%)** | **0/20 (0%)** |
+| A 4개의 결과(같은 테스트 구간 내) | **전부 완료**(tick 138/138/138/152) | **전부 미완료**(tick 167에 강제 종료, 진행 중이던 채로 killed) |
+
+**해석:** `PriorityPreempt<true>`는 B의 응답시간을 극적으로 예측 가능하게 만든다(표준편차 사실상 0, p99가 RR의 1/3) — RR은 최선의 경우(0~4tick)엔 오히려 더 빠를 수 있지만(B가 막 스스로 선언하기 전에 운 좋게 빈 틈을 만나는 경우), 최악의 경우(24tick, 목표의 1.6배)엔 훨씬 나쁘다. 이게 Adios 논문이 말하는 HOL blocking의 실측 재현이다. **그 대가는 명확하다: 같은 시간 동안 A가 전혀 진행하지 못했다** — B가 스스로를 선언한 뒤엔 `should_preempt()`가 매번 false를 반환해 끊기지 않고 끝까지 도는데, 그 몇 tick 동안 A는 완전히 배제된다. 20라운드 동안 이게 누적되며 A 4개 전부가 굶었다. **이것이 정확히 "긴 작업에도 실행 기회를 보장한다"는 원래 규칙과 충돌하는 지점**이며, plan.md에 미리 명시했던 관찰 대상(starvation)이 실제로 관측된 사례다. RR 대비 "어떤 조건에서 유리하고 어떤 조건에서 비용만 느는지"에 대한 1차 답: **B가 드물고 짧다면 이 방식이 이득이지만, B가 자주/많이 발생하면 A는 사실상 굶는다** — 이 임계점(B의 빈도·길이 대비 A 기아 정도)을 정량화하는 게 다음 실험 후보.
+
+**측정 한계(정직하게 명시):** B의 최초 디스패치(4tick 대기)는 두 정책 모두 동일 — RR-폴백 경쟁 구간이라 우선순위 메커니즘이 아직 개입 못 함(코드 주석에 이미 명시한 부트스트랩 한계, 실측으로 확인됨). CPUS=1(단일 코어)에서만 측정 — 멀티코어에서는 A들이 다른 코어로 분산돼 경쟁 자체가 줄어들 것이므로 결과가 달라질 수 있음, 별도 측정 필요. 문맥전환 횟수는 아직 계측 안 함(4단계에서 추가 예정).
+
+**⚠️ 외부 검토(2026-09-12)로 발견한 실제 결함 — 다음 실험 전 수정 필요:**
+1. ✅ **수정됨 — `wait(0)` 오회수 버그:** [kernel/proc.c:449](kernel/proc.c:449)의 `kwait()`는 `proc[]`을 스캔해 **처음 찾은 ZOMBIE 자식**을 회수한다(호출자가 기다리는 pid와 무관). `latencytest.c`의 부모는 A 4개 + 매 라운드 B를 동시에 자식으로 두므로, A가 종료하는 순간 B용 `wait(0)`가 A를 대신 회수할 수 있었다. `wait_for(target)` 헬퍼(반환 pid가 기대한 자식이 아니면 재시도)로 [user/latencytest.c](user/latencytest.c)에서 수정, v2 재측정으로 확인.
+2. **미수정 — `should_preempt()`에 상한이 없음:** [kernel/sched_priority.hpp:66-67](kernel/sched_priority.hpp:66)은 `running->priority == LatencySensitive`만 보고 **얼마나 오래 실행했는지는 안 본다** — "지연 민감"이 "짧다"를 보장하지 않는다는 뜻. 자진 선언한 프로세스가 실제로 길게 돌면 Normal뿐 아니라 **다른 LatencySensitive까지 무기한 굶을 수 있다.** 지금 워크로드(B가 한 번에 하나, 짧게)에서는 안 드러났을 뿐, 설계상 진짜 취약점 — budget 축 도입 시 함께 해결.
+3. ✅ **수정됨 — P99 표본 수 부족:** `NSHORT`를 20→100으로 올려 `(NSHORT*99)/100=99`가 실제 백분위수가 되도록 함(v2).
+4. ✅ **수정됨 — A를 강제 종료시켜 처리량/공정성 미측정:** `kill()` 제거, A가 끝까지 자연 완료하도록 바꾸고 완료 tick을 직접 비교(v2 결과 참고). 다만 "작업별 CPU 지분"(순간순간의 배분 비율)까지는 아직 안 잼 — 완료시간이라는 총량 지표만 있음.
+5. **미수정, 의도적 범위 밖 — kerneltrap()은 여전히 무조건 `yield()`**([kernel/trap.c:169](kernel/trap.c:169)) — 정책이 전체 실행 경로에 일관되게 적용된 건 아니라는 점을 결과 해석 시 명시해야 한다.
+
+**연구 질문 재정의 (다음 설계 가설, 아직 미구현):** "작업의 지연 요구를 우선순위에 반영하되, CPU 사용 예산과 대기 시간 보정을 어떻게 결합해야 tail latency를 낮추면서 다른 작업의 진행을 보장할 수 있을까?" 세 축을 구분해서 설계한다 — **우선순위**(얼마나 급한가, 명시적 선언), **연속 실행 quantum**(한 번 선택됐을 때 얼마나 오래 도는가), **누적 CPU budget**(일정 기간 얼마나 쓸 수 있는가, 소진 시 강등·보충 규칙 포함). quantum만 제한하면 strict priority 선택 때문에 Normal이 계속 밀릴 수 있으므로, 가중 CPU 지분/budget 소진 시 강등/aging 중 무엇으로 최소 진행을 보장할지가 검증 대상이다.
+
+**✅ Step 3 v2 측정 결과 (2026-09-12, 결함 1~2·4 수정 후 재측정 — `wait_for()`로 오회수 방지, `NSHORT=100`, A는 끝까지 자연 완료시킴. 워크로드는 v1과 동일: A 4개 각 6억 회, B 각 1억 회, `DEADLINE_TICKS=15`):**
+
+| | RR (기준선) | `PriorityPreempt<true>` |
+|---|---|---|
+| B p50 / p99 | 4 / 19 | 4 / **8** |
+| 목표(15tick) 초과율 | 5/100 (5%) | **0/100 (0%)** |
+| A 4개 완료 tick(전부 자연 완료) | **132, 132, 132, 141** | **184, 185, 193, 290** |
+| A 완료까지 걸린 시간(시작 tick 대비) | ≈115tick | ≈**263tick (약 2.3배)** |
+| 전체 테스트 길이 | tick 26→488 (462) | tick 27→483 (456) — 비슷함 |
+
+**정정된 해석:** 오회수 버그를 없애자 v1의 "A 전부 미완료"라는 극단적 결과는 사라졌다 — `PriorityPreempt`에서도 A는 결국 다 끝난다(무한 굶주림은 아님). 대신 **정량화된 트레이드오프**로 바뀌었다: B의 tail latency(p99 19→8, 절반 이하)와 deadline 초과율(5%→0%)은 확실히 개선되지만, 그 대가로 **A의 완료 시간이 약 2.3배 늘어난다**(115→263tick). p50은 두 정책이 거의 같다(4 vs 4) — 차이는 tail(p99)과 A의 처리량에서만 나타난다. 이게 v1보다 훨씬 정직하고 방어 가능한 결과다: "B가 가끔 온다면 A가 결국 끝나면서도 B의 꼬리 지연을 절반으로 줄일 수 있다"는, 실제로 쓸모 있는 절충으로 표현할 수 있다.
+
+**다음 실제 작업 순서:**
+1. ✅ `wait()` 오회수 수정, `NSHORT=100`, A 자연 완료 — 완료, 결과는 위 v2.
+2. `CPUS=1`에서 **RR → strict priority(현재 `PriorityPreempt`) → budget 추가 priority**(위 세 축 중 budget까지 구현한 새 정책) 순서로 비교.
+3. 요청 도착률·burst·작업 길이 편차를 바꿔가며 재측정.
+4. 배경 작업의 단위시간당 완료량·작업별 CPU 지분·최대 runnable 대기시간까지 계측 추가(현재는 A의 총 완료시간만 있음, 세분화된 CPU 지분은 아직 없음).
+
+**교수님께 설명할 때 표현:** "C++로 대기 시간을 줄였다"가 아니라 **"정책 비교 기반을 구현했고, 이를 통해 응답 시간·처리량·공정성의 절충을 연구하려 한다"**가 지금 코드 상태와 정확히 맞는다. 디스패치 실험도 "정적 디스패치가 빠르다"가 아니라 **"간접 호출 비용과 컴파일러 최적화 효과를 분리해 분석했다"**로 표현하는 게 정확하다(§Phase 1의 GCC 강도감소 발견 참고).
+
+**ADIOS 연결점 재정정:** ADIOS는 "busy-wait/yield를 선택하는 정책" 연구가 아니라, 페이지 폴트 핸들러와 스케줄러를 같은 주소공간에 두고 가벼운 unikernel 스레드로 **양보 비용 자체를 낮춰 스케줄링의 유불리를 바꾼** 연구다. 이 프로젝트와 맞닿는 지점은 "언제 CPU를 넘길지"와 "넘기는 비용이 전체 지연에 주는 영향"이며, xv6의 tick 단위 실험을 ADIOS의 마이크로초 RDMA 환경에 그대로 일반화할 수는 없다 — 연구 관심의 확장으로 설명한다.
 
 ### Phase 1.5 — mmap 타입 안전성 리팩터 (Phase 2~5와 독립, 언제 해도 무방)
 
@@ -549,7 +699,7 @@ constexpr ErrorOr<T> convert_to(Num auto u) {
 
 **의존성:** Phase 1.6(`ErrorOr<T>`)이 먼저 있어야 `throw`를 대체할 수 있음. Phase 1.5처럼 벤치마크 인프라(Phase 0) 없이 착수 가능.
 
-### Phase 2 — CFS용 인트루시브 템플릿 트리
+### Phase 2 — CFS용 인트루시브 템플릿 트리 (⏸️ 보류, 설계 보존)
 
 **출처: `project1-braeden-hue`(HYU-ELE3021 project1, 같은 사용자의 이전 과제)에 이미 완성된 nice-value 기반 CFS를 실제로 발견해서 그대로 포팅 대상으로 삼는다.** 순수 C로 짠 CLRS 스타일 레드블랙 트리(`kernel/rbtree.c`/`rbtree.h`, insert/delete fixup까지 정확히 구현됨)와 `struct proc`에 임베드된 `virtualRuntime`/`niceValue`/`runNode`가 이미 있다. **실제로 찾은 버그**: 이 트리가 전역 변수(`struct rb_tree runnableTree;`)인데 이 프로젝트는 `CPUS=3`(SMP)으로 도는데도 트리 자체를 보호하는 락이 없다 — 개별 `p->lock`만 잡고 `rb_insert`/`rb_delete`/`rb_first`를 호출하므로, 서로 다른 코어가 동시에 회전(rotation)하면 `root`/`parent` 포인터가 꼬일 수 있는 실제 SMP 레이스 컨디션이다. 우리 포팅에서는 **전용 스핀락을 트리 자체에 내장**해서 고친다(Phase 1의 `seq_lock` 패턴과 동일).
 

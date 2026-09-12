@@ -180,6 +180,7 @@ UPROGS=\
 	$U/_mypid\
 	$U/_burn\
 	$U/_statstest\
+	$U/_mixbench\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

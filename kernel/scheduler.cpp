@@ -82,7 +82,7 @@ template<SchedulerPolicy P>
 // Phase 1.8 step 3: PriorityPreempt<true> run for user/latencytest.c
 // comparison. Swap to RR and rebuild for the other side -- this one line
 // is the whole difference.
-using ActivePolicy = PriorityPreempt<true>;
+using ActivePolicy = PrioritySelectOnly<true>;
 
 // File-scope (not function-local): policy_should_preempt() below needs the
 // same instance dispatch() is using -- a should_preempt() that carries its

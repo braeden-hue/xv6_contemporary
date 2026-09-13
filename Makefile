@@ -15,6 +15,14 @@ OBJS = \
   $K/proc.o \
   $K/scheduler.o \
   $K/bench.o \
+  $K/bench_rr_direct.o \
+  $K/bench_rr_direct_cpp.o \
+  $K/bench_resource_ledger.o \
+  $K/bench_resource_fakealloc.o \
+  $K/bench_resource_a.o \
+  $K/bench_resource_b.o \
+  $K/bench_resource_c.o \
+  $K/bench_resource_harness.o \
   $K/swtch.o \
   $K/trampoline.o \
   $K/trap.o \

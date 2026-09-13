@@ -8,6 +8,13 @@ volatile static int started = 0;
 
 extern void run_calibration(void);    // kernel/bench.cpp: instret calibration (done, kept for re-verification)
 extern void run_dispatch_bench(void); // kernel/bench.cpp: static vs fnptr pick_next() comparison
+extern void run_resource_experiment(void); // kernel/bench_resource_harness.cpp: EP1-RESOURCE-01 -- needs kalloc(), run after kinit()
+
+// Set to 0 for regression runs (usertests -q etc.) so the production
+// benchmark/correctness harness isn't itself running during that check, per
+// docs/episode1_next_experiment_plan.md's "run existing relevant
+// allocator/user regression checks with the production benchmark disabled".
+#define EP1_RESOURCE_RUN_AT_BOOT 1
 
 // start() jumps here in supervisor mode on all CPUs.
 void
@@ -21,6 +28,9 @@ main()
     printf("\n");
     run_dispatch_bench();
     kinit();         // physical page allocator
+#if EP1_RESOURCE_RUN_AT_BOOT
+    run_resource_experiment(); // needs a working kalloc(); before paging is fine (kinit already ran)
+#endif
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
     procinit();      // process table

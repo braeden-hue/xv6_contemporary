@@ -195,7 +195,249 @@ static uint64 measure_static_rr_opaque_n(int reps) {
     return after - before;
 }
 
+// --- SCHED-VANILLA-DISPATCH-01: vanilla xv6 scan vs current RR::pick_next() ---
+// Design doc: agent-management/projects/xv6_os_project/design/
+// vanilla_cpp_rr_dispatch_bench/spec.md
+//
+// vanilla_style_pick_next() is the RUNNABLE-scan from this repo's own
+// pre-Phase-1 scheduler() (git commit cb4e0c1, kernel/proc.c:441-446),
+// quoted verbatim below for reference:
+//
+//   for(p = proc; p < &proc[NPROC]; p++) {
+//     acquire(&p->lock);
+//     if(p->state == RUNNABLE) {
+//       p->state = RUNNING;
+//       c->proc = p;
+//       swtch(&c->context, &p->context);
+//       c->proc = 0;
+//       found = 1;
+//     }
+//     release(&p->lock);
+//   }
+//
+// Adapted (per spec.md SS4) into a pick_next()-shaped function so it can be
+// measured the same way Phase 1 measured RR::pick_next():
+//   - acquire()/release()/swtch() removed -- Phase 1's own pick_next()
+//     measurements exclude locking and the context switch too, so this
+//     keeps both sides on the same boundary (search cost only).
+//   - an early "return on first match" ADDED. The original loop has no
+//     such thing -- it keeps sweeping and would switch to every RUNNABLE
+//     proc it meets in one pass. This is the one deliberate change from
+//     verbatim; see spec.md SS3 for why a literal port isn't possible.
+// Do not read this as "vanilla xv6's real dispatch cost" -- see spec.md
+// SS7 (non-goals) before quoting a number out of this function's context.
+static struct proc* vanilla_style_pick_next(struct proc* procs, int n) {
+    for (struct proc* p = procs; p < &procs[n]; p++) {
+        if (p->state == RUNNABLE) {
+            return p;   // adaptation, not in the original loop
+        }
+    }
+    return nullptr;
+}
+
+static uint64 measure_vanilla_style(int reps) {
+    uint64 before = r_instret();
+    for (int i = 0; i < reps; i++) {
+        struct proc* p = vanilla_style_pick_next(bench_procs, BENCH_NPROC);
+        BENCH_KEEP(p);
+    }
+    uint64 after = r_instret();
+    return after - before;
+}
+
+// --- SCHED-EPISODE1-ABC-01: C direct vs C++ template vs C++ fnptr ---
+// The question this isolates: "does separating the policy into a C++
+// template cost more than writing the same search directly in C?" -- a
+// different question from Phase 1's "static vs fnptr dispatch *within*
+// C++", and from SCHED-VANILLA-DISPATCH-01's "this project's RR vs the
+// original xv6 scheduler()'s unrelated algorithm". Three conditions, all
+// with search order/last-update/wrap/n-as-runtime-parameter held identical
+// (verified below, not assumed):
+//   A. kernel/bench_rr_direct.c      -- plain C, compiled by $(CC) (gcc-14)
+//   B. kernel/bench_rr_direct_cpp.cpp -- same RR policy object, __attribute__
+//      ((noinline)) wrapper forces it out-of-line, compiled by $(CXX)
+//   C. fnptr_rr_pick_next above       -- existing indirect-call contrast
+// A and B are both reached through an ordinary out-of-line direct call
+// (neither can be inlined into this TU -- A because it's a separate .c
+// file with no LTO, B because of the noinline attribute) so neither side
+// is unfairly given an optimization opportunity the other lacks; this is
+// what makes A vs B the fair "abstraction cost" comparison, unlike
+// comparing A against the *inlined* rr_static/rr_static_opaque numbers
+// above would have been.
+extern "C" {
+struct proc* c_rr_pick_next(struct proc* procs, int n);
+void c_rr_reset_last(void);
+int c_rr_get_last(void);
+struct proc* cpp_rr_pick_next_noinline(struct proc* procs, int n);
+void cpp_rr_direct_reset_last(void);
+int cpp_rr_direct_get_last(void);
+}
+
+static uint64 measure_c_direct(int reps) {
+    uint64 before = r_instret();
+    for (int i = 0; i < reps; i++) {
+        struct proc* p = c_rr_pick_next(bench_procs, BENCH_NPROC);
+        BENCH_KEEP(p);
+    }
+    uint64 after = r_instret();
+    return after - before;
+}
+
+static uint64 measure_cpp_direct_noinline(int reps) {
+    uint64 before = r_instret();
+    for (int i = 0; i < reps; i++) {
+        struct proc* p = cpp_rr_pick_next_noinline(bench_procs, BENCH_NPROC);
+        BENCH_KEEP(p);
+    }
+    uint64 after = r_instret();
+    return after - before;
+}
+
+// Correctness gate, run before any timing: from the SAME reset state
+// (bench_reset_procs(), last=-1), confirm all four call paths -- A, B
+// out-of-line, B inlined (existing RR policy object), and C (fnptr) --
+// pick the same proc index and update `last` to the same value, call for
+// call. If these sequences ever diverge, the instret numbers below are not
+// comparing the same algorithm and must not be trusted.
+static void verify_abc_equivalence(int calls) {
+    bench_reset_procs();
+    c_rr_reset_last();
+    for (int i = 0; i < calls; i++) {
+        struct proc* p = c_rr_pick_next(bench_procs, BENCH_NPROC);
+        int idx = p ? (int)(p - bench_procs) : -1;
+        printf((char*)"[verify] A(C-direct)     call=%d idx=%d last=%d\n", i, idx, c_rr_get_last());
+    }
+
+    bench_reset_procs();
+    cpp_rr_direct_reset_last();
+    for (int i = 0; i < calls; i++) {
+        struct proc* p = cpp_rr_pick_next_noinline(bench_procs, BENCH_NPROC);
+        int idx = p ? (int)(p - bench_procs) : -1;
+        printf((char*)"[verify] B(cpp-noinline) call=%d idx=%d last=%d\n", i, idx, cpp_rr_direct_get_last());
+    }
+
+    {
+        RR policy;
+        bench_reset_procs();
+        for (int i = 0; i < calls; i++) {
+            struct proc* p = policy.pick_next(bench_procs, BENCH_NPROC);
+            int idx = p ? (int)(p - bench_procs) : -1;
+            printf((char*)"[verify] B(cpp-inlined)  call=%d idx=%d last=%d\n", i, idx, policy.last);
+        }
+    }
+
+    bench_reset_procs();
+    fnptr_rr_last = -1;
+    for (int i = 0; i < calls; i++) {
+        struct proc* p = g_rr_fn(bench_procs, BENCH_NPROC);
+        int idx = p ? (int)(p - bench_procs) : -1;
+        printf((char*)"[verify] C(fnptr)        call=%d idx=%d last=%d\n", i, idx, fnptr_rr_last);
+    }
+}
+
+// --- Boundary-case equivalence check (per 2026-09-13 feedback) ---
+// The single-input check above (only the last slot RUNNABLE, 5 calls) is an
+// equivalence check for THAT input only, not general equivalence. This adds
+// three more cases: an empty RUNNABLE set, several scattered RUNNABLE procs
+// (exercises cycling past the count), and a wraparound forced by a
+// mid-sequence state change (the RUNNABLE set changes between two calls,
+// same as a real scheduler would see between dispatch() invocations).
+typedef struct proc* (*rr_call_fn)(struct proc*, int);
+typedef void (*rr_reset_fn)(void);
+typedef int (*rr_get_last_fn)(void);
+
+struct BenchCondition {
+    const char* label;
+    rr_reset_fn reset_last;
+    rr_call_fn call;
+    rr_get_last_fn get_last;
+};
+
+// B(inlined) and C(fnptr) don't already expose a reset/call/get_last triple
+// with this exact signature (B-inlined is a method on a stack object in the
+// earlier verify function; C's state is two loose statics) -- small
+// wrappers here, not used by the timed measurements above, only by this
+// boundary check.
+static RR g_boundary_inlined_policy;
+static void b_inlined_reset_last() { g_boundary_inlined_policy.last = -1; }
+static struct proc* b_inlined_call(struct proc* procs, int n) {
+    return g_boundary_inlined_policy.pick_next(procs, n);
+}
+static int b_inlined_get_last() { return g_boundary_inlined_policy.last; }
+
+static void fnptr_reset_last() { fnptr_rr_last = -1; }
+static struct proc* fnptr_call_wrapper(struct proc* procs, int n) { return g_rr_fn(procs, n); }
+static int fnptr_get_last() { return fnptr_rr_last; }
+
+static void bench_set_all_unused() {
+    for (int i = 0; i < BENCH_NPROC; i++)
+        bench_procs[i].state = UNUSED;
+}
+
+static void bench_set_runnable_indices(const int* idxs, int count) {
+    bench_set_all_unused();
+    for (int i = 0; i < count; i++)
+        bench_procs[idxs[i]].state = RUNNABLE;
+}
+
+static void run_boundary_script(const BenchCondition& c) {
+    // Case 1: empty RUNNABLE set.
+    bench_set_all_unused();
+    c.reset_last();
+    struct proc* p0 = c.call(bench_procs, BENCH_NPROC);
+    printf((char*)"[verify-boundary] %s case=empty     idx=%d last=%d (expect idx=-1 last=-1)\n",
+           c.label, p0 ? (int)(p0 - bench_procs) : -1, c.get_last());
+
+    // Case 2: several scattered RUNNABLE procs, called past the count so the
+    // circular scan must wrap and repeat.
+    int scattered[3] = {5, 20, 40};
+    bench_set_runnable_indices(scattered, 3);
+    c.reset_last();
+    for (int i = 0; i < 6; i++) {
+        struct proc* p = c.call(bench_procs, BENCH_NPROC);
+        printf((char*)"[verify-boundary] %s case=scattered call=%d idx=%d last=%d\n",
+               c.label, i, p ? (int)(p - bench_procs) : -1, c.get_last());
+    }
+
+    // Case 3: wraparound forced by a mid-sequence state change -- select
+    // idx=62 first (last becomes 62, near the top of the range), then the
+    // RUNNABLE set changes to just idx=0 before the next call, forcing the
+    // scan to wrap past the array end (63) to reach it.
+    {
+        int high[1] = {62};
+        bench_set_runnable_indices(high, 1);
+        c.reset_last();
+        struct proc* r1 = c.call(bench_procs, BENCH_NPROC);
+        int first_idx = r1 ? (int)(r1 - bench_procs) : -1;
+        int first_last = c.get_last();
+
+        int low[1] = {0};
+        bench_set_runnable_indices(low, 1);   // state changes between calls
+        struct proc* r2 = c.call(bench_procs, BENCH_NPROC);
+        int wrapped_idx = r2 ? (int)(r2 - bench_procs) : -1;
+        int wrapped_last = c.get_last();
+
+        printf((char*)"[verify-boundary] %s case=wrap first_idx=%d first_last=%d wrapped_idx=%d wrapped_last=%d (expect 62,62,0,0)\n",
+               c.label, first_idx, first_last, wrapped_idx, wrapped_last);
+    }
+}
+
+static void verify_abc_boundary_cases() {
+    BenchCondition conditions[4] = {
+        {"A(C-direct)    ", c_rr_reset_last,        c_rr_pick_next,             c_rr_get_last},
+        {"B(cpp-noinline)", cpp_rr_direct_reset_last, cpp_rr_pick_next_noinline, cpp_rr_direct_get_last},
+        {"B(cpp-inlined) ", b_inlined_reset_last,    b_inlined_call,             b_inlined_get_last},
+        {"C(fnptr)       ", fnptr_reset_last,        fnptr_call_wrapper,         fnptr_get_last},
+    };
+    for (int i = 0; i < 4; i++) {
+        run_boundary_script(conditions[i]);
+    }
+}
+
 extern "C" void run_dispatch_bench(void) {
+    verify_abc_equivalence(5);
+    verify_abc_boundary_cases();
+
     bench_reset_procs();
     uint64 trivial_static = measure_static_trivial(BENCH_REPS);
     bench_reset_procs();
@@ -209,6 +451,17 @@ extern "C" void run_dispatch_bench(void) {
 
     bench_reset_procs();
     uint64 rr_static_opaque = measure_static_rr_opaque_n(BENCH_REPS);
+
+    bench_reset_procs();
+    uint64 vanilla_style = measure_vanilla_style(BENCH_REPS);
+
+    c_rr_reset_last();
+    bench_reset_procs();
+    uint64 c_direct = measure_c_direct(BENCH_REPS);
+
+    cpp_rr_direct_reset_last();
+    bench_reset_procs();
+    uint64 cpp_direct_noinline = measure_cpp_direct_noinline(BENCH_REPS);
 
     printf((char*)"[dispatch] trivial static total=%d per_call=%d\n",
            (int)trivial_static, (int)(trivial_static / BENCH_REPS));
@@ -228,4 +481,24 @@ extern "C" void run_dispatch_bench(void) {
            (int)rr_static_opaque, (int)(rr_static_opaque / BENCH_REPS));
     printf((char*)"[dispatch] RR opaque-n delta vs fnptr, per_call=%d (isolates call-path cost once the constant-n codegen confound is removed)\n",
            (int)(((long)rr_fnptr - (long)rr_static_opaque) / BENCH_REPS));
+
+    printf((char*)"[dispatch] vanilla-style scan (adapted from pre-Phase-1 scheduler(), no lock/swtch) total=%d per_call=%d\n",
+           (int)vanilla_style, (int)(vanilla_style / BENCH_REPS));
+    printf((char*)"[dispatch] vanilla-style vs cpp RR static delta (vanilla - cpp static), per_call=%d\n",
+           (int)(((long)vanilla_style - (long)rr_static) / BENCH_REPS));
+    printf((char*)"[dispatch] vanilla-style vs cpp RR static-opaque-n delta (vanilla - cpp static opaque-n), per_call=%d\n",
+           (int)(((long)vanilla_style - (long)rr_static_opaque) / BENCH_REPS));
+
+    printf((char*)"[dispatch] A: RR direct-C (out-of-line, gcc-14) total=%d per_call=%d\n",
+           (int)c_direct, (int)(c_direct / BENCH_REPS));
+    printf((char*)"[dispatch] B: RR cpp-template noinline (out-of-line, g++-14) total=%d per_call=%d\n",
+           (int)cpp_direct_noinline, (int)(cpp_direct_noinline / BENCH_REPS));
+    printf((char*)"[dispatch] C: RR fnptr (existing, out-of-line + indirect call) total=%d per_call=%d\n",
+           (int)rr_fnptr, (int)(rr_fnptr / BENCH_REPS));
+    printf((char*)"[dispatch] A vs B delta (direct-C - cpp-noinline), per_call=%d (both out-of-line, direct call, opaque-n, same -O -- the fair abstraction-cost comparison)\n",
+           (int)(((long)c_direct - (long)cpp_direct_noinline) / BENCH_REPS));
+    printf((char*)"[dispatch] B vs C delta (cpp-noinline - fnptr), per_call=%d (isolates direct call vs indirect/fnptr call, both out-of-line C++)\n",
+           (int)(((long)cpp_direct_noinline - (long)rr_fnptr) / BENCH_REPS));
+    printf((char*)"[dispatch] A vs B(inlined) delta (direct-C - cpp static-opaque-n), per_call=%d (NOT apples-to-apples -- B here is inlined, shown for context only)\n",
+           (int)(((long)c_direct - (long)rr_static_opaque) / BENCH_REPS));
 }

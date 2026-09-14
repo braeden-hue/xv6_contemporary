@@ -16,6 +16,14 @@ void kernelvec();
 
 extern int devintr();
 extern int policy_should_preempt(struct proc *p);   // kernel/scheduler.cpp (Phase 1.8)
+extern void policy_charge_tick(struct proc *p);      // kernel/scheduler.cpp (SCHED-EP2-BUDGET-01) --
+                                                      // unconditional per-tick hook, called from BOTH
+                                                      // usertrap() and kerneltrap() below, unlike
+                                                      // policy_should_preempt() which kerneltrap() never calls
+#include "span_observe_config.h"
+#if EP2_SPAN_OBSERVE_ENABLED
+extern void span_observe_clockintr_tick(void);       // kernel/span_observe.cpp -- empirical tick<->r_time calibration
+#endif
 
 void
 trapinit(void)
@@ -105,8 +113,10 @@ usertrap(void)
   // of a plain `++`/read, per the same audit: RV64's aligned-access
   // non-tearing guarantee is a hardware property, not a substitute for
   // defined C/C++ concurrent-access semantics.
-  if(which_dev == 2)
+  if(which_dev == 2) {
     __atomic_fetch_add(&p->run_ticks_total, 1, __ATOMIC_RELAXED);
+    policy_charge_tick(p);   // SCHED-EP2-BUDGET-01: unconditional, independent of should_preempt() below
+  }
 
   if(killed(p))
     kexit(-1);
@@ -193,6 +203,7 @@ kerneltrap()
     // would look artificially starved in the fairness stats relative to
     // user-mode-heavy ones.
     __atomic_fetch_add(&myproc()->run_ticks_total, 1, __ATOMIC_RELAXED);
+    policy_charge_tick(myproc());   // SCHED-EP2-BUDGET-01: kernel-mode ticks must not be missed (S2.1)
     yield();
   }
 
@@ -227,6 +238,9 @@ clockintr()
     // (__atomic_load_n), which __sync_* has no equivalent for without
     // faking one as a wasteful RMW (e.g. fetch_and_add(&x, 0)).
     __atomic_fetch_add(&ticks, 1, __ATOMIC_RELAXED);
+#if EP2_SPAN_OBSERVE_ENABLED
+    span_observe_clockintr_tick();   // real tick boundary -- empirical tick<->r_time calibration sample
+#endif
     wakeup(&ticks);
     release(&tickslock);
   }

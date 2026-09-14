@@ -105,6 +105,8 @@ extern uint64 sys_mmap(void);
 extern uint64 sys_munmap(void);
 extern uint64 sys_setpriority(void);
 extern uint64 sys_sched_stats(void);
+extern uint64 sys_sched_budget_stats(void);
+extern uint64 sys_sched_span_dump(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -134,6 +136,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_munmap]  sys_munmap,
 [SYS_setpriority] sys_setpriority,
 [SYS_sched_stats] sys_sched_stats,
+[SYS_sched_budget_stats] sys_sched_budget_stats,
+[SYS_sched_span_dump] sys_sched_span_dump,
 };
 
 void

@@ -9,6 +9,8 @@ volatile static int started = 0;
 extern void run_calibration(void);    // kernel/bench.cpp: instret calibration (done, kept for re-verification)
 extern void run_dispatch_bench(void); // kernel/bench.cpp: static vs fnptr pick_next() comparison
 extern void run_resource_experiment(void); // kernel/bench_resource_harness.cpp: EP1-RESOURCE-01 -- needs kalloc(), run after kinit()
+extern void run_budget_window_selftest(void); // kernel/bench_budget_window.cpp: SCHED-EP2-BUDGET-01, synthetic-tick self-test
+extern void run_span_window_selftest(void); // kernel/bench_span_window_selftest.cpp: SCHED-EP2-BUDGET-01 S11, synthetic r_time self-test
 
 // Set to 0 for regression runs (usertests -q etc.) so the production
 // benchmark/correctness harness isn't itself running during that check, per
@@ -27,6 +29,8 @@ main()
     printf("xv6 kernel is booting\n");
     printf("\n");
     run_dispatch_bench();
+    run_budget_window_selftest(); // pure/synthetic, no kalloc needed -- run early
+    run_span_window_selftest(); // pure/synthetic, no kalloc needed -- run early
     kinit();         // physical page allocator
 #if EP1_RESOURCE_RUN_AT_BOOT
     run_resource_experiment(); // needs a working kalloc(); before paging is fine (kinit already ran)

@@ -24,3 +24,5 @@
 #define SYS_munmap 23
 #define SYS_setpriority 24   // Phase 1.8: 0=Normal, 1=LatencySensitive, explicit only
 #define SYS_sched_stats 25   // Phase 1.8b: read back a pid's tick accounting (fairness measurement)
+#define SYS_sched_budget_stats 26   // SCHED-EP2-BUDGET-01: policy-level (not per-pid) budget diagnostics
+#define SYS_sched_span_dump 27      // SCHED-EP2-BUDGET-01 S11: dump the span-observation per-window table

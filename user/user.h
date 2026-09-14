@@ -30,6 +30,13 @@ int   setpriority(int level);   // Phase 1.8: 0=Normal, 1=LatencySensitive
 // Phase 1.8b: out must point to 4 uint64s -- see kernel/sysproc.c's
 // sys_sched_stats() comment for what each slot means.
 int   sched_stats(int pid, uint64 *out);
+// SCHED-EP2-BUDGET-01: out must point to 3 uint64s -- see kernel/sysproc.c's
+// sys_sched_budget_stats() comment for what each slot means. Policy-level,
+// not per-pid; reports all-zero under policies that don't track a budget.
+int   sched_budget_stats(uint64 *out);
+// SCHED-EP2-BUDGET-01 S11: triggers a kernel-side printf dump of the
+// span-observation per-window LS execution-time table. No output params.
+int   sched_span_dump(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

@@ -5,7 +5,7 @@
 
 // Mixed Workload Response-Time Experiment
 // (agent-management/projects/xv6_os_project/design/mixed_workload_experiment/, rev5,
-// Design Gate ACCEPTED 2026-09-12; implementation per DECISIONS.md's MW-R5-01 Claude Code
+// Design Gate ACCEPTED 2026-09-12; implementation per DECISIONS.md's MW-R5-01
 // instruction). Replaces user/latencytest.c's experimental role -- see that DECISIONS.md
 // entry and spec.md for the full methodology and its 5-round Design Gate revision history
 // (measurement-window pollution, closed-loop-disguised-as-open-loop arrival, conflated
@@ -339,6 +339,15 @@ main(void)
   int ncreated = 0;
   int i;
   uint64 t0;
+  // SCHED-EP2-BUDGET-01 (2026-09-14 review): before/after snapshot, not a
+  // single end-of-run cumulative-since-boot read -- the three counters are
+  // monotonic since kernel boot, so reading them only once at the end would
+  // conflate this workload's contribution with whatever ran before it.
+  // budget_start_ok tracks whether the START query itself succeeded; a
+  // failure there (or at the end) invalidates the run outright (see
+  // run_valid below) rather than just silently omitting the print line.
+  uint64 budget_start[3];
+  int budget_start_ok;
 
   for(i = 0; i < NTASKS; i++)
     pid[i] = -1;
@@ -549,6 +558,11 @@ main(void)
   pause(SETTLE_TICKS);
 
   t0 = now_tick();
+  // Start snapshot -- see the declaration comment above. Taken as close to
+  // t0 as possible (after settle, before any task is released) so the
+  // window this snapshot brackets matches t0..t_end as closely as the
+  // syscall boundary allows.
+  budget_start_ok = (sched_budget_stats(budget_start) == 0);
   // run=1: this binary does not loop over repeated in-kernel runs itself --
   // each QEMU boot is one run, and "run" here is a fixed placeholder for
   // Stage A's single pilot invocation (spec.md's N>=5-per-condition Stage B
@@ -834,13 +848,55 @@ main(void)
       run_valid = 0;
 #endif
 
+    // SCHED-EP2-BUDGET-01 (2026-09-14 review): the end snapshot is taken
+    // HERE -- before run_valid is finalized and before MIXBENCH_DONE is
+    // printed -- specifically so a failed query (either end, or the start
+    // query above) sinks run_valid the same way a collection failure does,
+    // instead of the stats line just quietly not appearing. A caller must
+    // never be able to mistake "the syscall failed" for "the policy
+    // reported zero engagement".
+    uint64 budget_end[3];
+    int budget_end_ok = (sched_budget_stats(budget_end) == 0);
+    int budget_stats_ok = budget_start_ok && budget_end_ok;
+    if(!budget_stats_ok)
+      run_valid = 0;
+
+    // SCHED-EP2-BUDGET-01 (2026-09-14 review): printed BEFORE MIXBENCH_DONE
+    // on purpose -- MIXBENCH_DONE is the sentinel line an external
+    // collector watches for and may stop reading right after seeing it, so
+    // a stats line printed AFTER it can be silently missed. Printing this
+    // first means a collector that stops at MIXBENCH_DONE has already seen
+    // it. Always printed, even on query failure (explicit stats_ok=0
+    // marker), never just omitted. Values are a before/after DELTA across
+    // this workload's window (t0..t_end), not a raw cumulative-since-boot
+    // read -- see the start-snapshot comment above. All-zero under any
+    // policy that doesn't track a budget (design spec S4).
+    if (budget_stats_ok) {
+      printf("MIXBENCH_BUDGET_STATS stats_ok=1 ls_charged_ticks=%lu budget_exhaustions=%lu "
+             "normal_selected_while_ls_runnable=%lu\n",
+             budget_end[0] - budget_start[0],
+             budget_end[1] - budget_start[1],
+             budget_end[2] - budget_start[2]);
+    } else {
+      printf("MIXBENCH_BUDGET_STATS stats_ok=0 ls_charged_ticks=0 budget_exhaustions=0 "
+             "normal_selected_while_ls_runnable=0\n");
+    }
+
     // MIXBENCH_DONE is the one line an aggregator should treat as
     // authoritative for "did this run actually complete cleanly" --
     // partial creation (ncreated < NTASKS), a reap mismatch, any non-zero
     // child exit status (which now includes a task's own failed self
-    // sched_stats query), or any failed release write() all fold into
-    // run_valid explicitly rather than being silently treated as PASS
-    // (DECISIONS.md MW-R5-01 instruction 4).
+    // sched_stats query), a failed release write(), or a failed budget-stats
+    // query (either snapshot) all fold into run_valid explicitly rather
+    // than being silently treated as PASS (DECISIONS.md MW-R5-01
+    // instruction 4).
+    // SCHED-EP2-BUDGET-01 S11: dumps the span-observation per-window LS
+    // execution-time table (kernel/span_observe.cpp), if the kernel was
+    // built with EP2_SPAN_OBSERVE_ENABLED=1 -- prints "DISABLED" otherwise
+    // (the OFF half of the OFF/ON pilot pair). Printed before MIXBENCH_DONE
+    // for the same reason as MIXBENCH_BUDGET_STATS above.
+    sched_span_dump();
+
     printf("MIXBENCH_DONE condition=%s ncreated=%d nreaped=%d all_expected_reaped=%d "
            "all_exit_ok=%d any_release_failed=%d run_valid=%d t0=%lu t_end=%lu "
            "mode_label=%s\n",

@@ -98,15 +98,44 @@ sys_kill(void)
 // Phase 1.8: a process explicitly declares its own priority. Never called
 // on another pid's behalf, never inferred from run length -- length and
 // urgency are separate information (see plan.md Phase 1.8).
+#include "span_observe_config.h"
+#if EP2_SPAN_OBSERVE_ENABLED
+// old_priority is the value BEFORE this call -- span_observe.cpp needs it
+// to tell a real transition apart from a same-value call (e.g. a LONG
+// task's Normal->Normal setpriority(0) under QD), which must be a no-op
+// for the span accounting, not misread as a priority flip (2026-09-14
+// 3rd review, bug 1).
+extern void span_observe_priority_change(struct proc*, int old_priority);
+#endif
+
 uint64
 sys_setpriority(void)
 {
   int level;
+#if EP2_SPAN_OBSERVE_ENABLED
+  int old_priority = myproc()->priority;
+#endif
 
   argint(0, &level);
   if (level != 0 && level != 1)
     return -1;
   myproc()->priority = level;
+#if EP2_SPAN_OBSERVE_ENABLED
+  span_observe_priority_change(myproc(), old_priority);
+#endif
+  return 0;
+}
+
+// SCHED-EP2-BUDGET-01 S11: triggers the kernel to printf its per-window LS
+// execution-time table (kernel/span_observe.cpp). No arguments, no
+// copyout -- this is a scoped, temporary diagnostic tool, not a
+// permanent public ABI addition like sched_stats/sched_budget_stats.
+extern void span_observe_dump(void);
+
+uint64
+sys_sched_span_dump(void)
+{
+  span_observe_dump();
   return 0;
 }
 
@@ -166,6 +195,38 @@ sys_sched_stats(void)
   }
   if(!found)
     return -1;
+  if(copyout(caller->pagetable, addr, (char *)out, sizeof(out)) < 0)
+    return -1;
+  return 0;
+}
+
+// SCHED-EP2-BUDGET-01 (design/ep2_selectonly_budget/spec.md S4): policy-level
+// (not per-pid) diagnostics. Writes 3 uint64s to *addr:
+//   [0] ls_charged_ticks               -- cumulative timer ticks charged to
+//                                         an LS-priority proc (diagnostic,
+//                                         never resets across windows)
+//   [1] budget_exhaustions             -- count of window-transitions into
+//                                         "exhausted" (at most 1 per window)
+//   [2] normal_selected_while_ls_runnable -- count of ticks where the budget
+//                                         was exhausted, an LS proc WAS
+//                                         runnable, and a Normal proc got
+//                                         picked anyway (the actual
+//                                         "displacement prevented" signal)
+// Policies without get_budget_stats() (RR/FCFS/PriorityPreempt/
+// PrioritySelectOnly) report all-zero via policy_budget_stats()'s
+// concept-gated else-branch (kernel/scheduler.cpp) -- this syscall itself
+// is identical for every policy.
+extern void policy_budget_stats(uint64 *out);
+
+uint64
+sys_sched_budget_stats(void)
+{
+  uint64 addr;
+  struct proc *caller = myproc();
+  uint64 out[3];
+
+  argaddr(0, &addr);
+  policy_budget_stats(out);
   if(copyout(caller->pagetable, addr, (char *)out, sizeof(out)) < 0)
     return -1;
   return 0;

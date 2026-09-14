@@ -46,3 +46,5 @@ entry("mmap");
 entry("munmap");
 entry("setpriority");
 entry("sched_stats");
+entry("sched_budget_stats");
+entry("sched_span_dump");

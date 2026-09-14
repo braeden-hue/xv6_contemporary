@@ -18,6 +18,12 @@ extern "C" {
 #include "sched_fcfs.hpp"
 #include "sched_rr.hpp"
 #include "sched_priority.hpp"
+#include "span_observe_config.h"
+
+#if EP2_SPAN_OBSERVE_ENABLED
+extern "C" void span_observe_dispatch_enter(struct proc* p);
+extern "C" void span_observe_dispatch_exit(struct proc* p, uint64 t_exit);
+#endif
 
 template<SchedulerPolicy P>
 [[noreturn]] static void dispatch(P& policy)
@@ -69,7 +75,13 @@ template<SchedulerPolicy P>
                         next->wait_ticks_max = w;
                 }
                 c->proc = next;
+#if EP2_SPAN_OBSERVE_ENABLED
+                span_observe_dispatch_enter(next);
                 swtch(&c->context, &next->context);
+                span_observe_dispatch_exit(next, r_time());
+#else
+                swtch(&c->context, &next->context);
+#endif
                 c->proc = 0;
             }
             release(&next->lock);
@@ -82,7 +94,7 @@ template<SchedulerPolicy P>
 // Phase 1.8 step 3: PriorityPreempt<true> run for user/latencytest.c
 // comparison. Swap to RR and rebuild for the other side -- this one line
 // is the whole difference.
-using ActivePolicy = PrioritySelectOnly<true>;
+using ActivePolicy = PrioritySelectOnly<true>;   // SCHED-EP2-BUDGET-01 S11: baseline fixed to SelectOnly for the span-observation pilot (Budget's selection changes must not be active here)
 
 // File-scope (not function-local): policy_should_preempt() below needs the
 // same instance dispatch() is using -- a should_preempt() that carries its
@@ -101,4 +113,64 @@ extern "C" [[noreturn]] void scheduler_dispatch(void)
 extern "C" int policy_should_preempt(struct proc* running)
 {
     return g_policy.should_preempt(running) ? 1 : 0;
+}
+
+// SCHED-EP2-BUDGET-01 (design/ep2_selectonly_budget/spec.md S2.2): a second,
+// unconditional per-tick hook, called from BOTH kernel/trap.c's usertrap()
+// AND kerneltrap() -- unlike policy_should_preempt() above, which
+// kerneltrap() never calls at all, so charging a policy's tick-budget only
+// from that path would silently miss every kernel-mode tick. Concept-gated
+// so policies without a charge_tick() method (RR/FCFS/PriorityPreempt/
+// PrioritySelectOnly) compile this down to nothing -- zero added
+// instructions on their path, same "if constexpr, not a runtime branch"
+// discipline as Episode 1's static-specialization findings.
+template<typename P>
+concept HasChargeTick = requires(P& policy, struct proc* running) {
+    policy.charge_tick(running);
+};
+
+// `if constexpr`'s "discard the other branch without checking its members
+// exist" behavior only applies inside a template -- policy_charge_tick()
+// itself is a plain (non-template) extern "C" function, so putting the
+// `if constexpr` directly in its body still fully typechecks BOTH branches
+// against the one concrete ActivePolicy and fails to compile for any
+// policy lacking charge_tick(). Routing through this small template
+// wrapper is what actually makes the discarding apply.
+template<typename P>
+static void charge_tick_impl(P& policy, struct proc* running)
+{
+    if constexpr (HasChargeTick<P>) {
+        policy.charge_tick(running);
+    }
+}
+
+extern "C" void policy_charge_tick(struct proc* running)
+{
+    charge_tick_impl(g_policy, running);
+}
+
+// Policy-level (not per-pid) diagnostic counters -- kernel/sysproc.c's
+// sys_sched_budget_stats() copies these out to user space. Policies without
+// get_budget_stats() report all-zero, so the SAME query path works
+// identically for RR/SelectOnly/PrioritySelectBudget (design spec S4).
+template<typename P>
+concept HasBudgetStats = requires(const P& policy, uint64* out) {
+    policy.get_budget_stats(out);
+};
+
+template<typename P>
+static void budget_stats_impl(const P& policy, uint64* out)
+{
+    if constexpr (HasBudgetStats<P>) {
+        policy.get_budget_stats(out);
+    } else {
+        out[0] = 0;
+        out[1] = 0;
+        out[2] = 0;
+    }
+}
+
+extern "C" void policy_budget_stats(uint64* out)
+{
+    budget_stats_impl(g_policy, out);
 }

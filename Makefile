@@ -23,6 +23,9 @@ OBJS = \
   $K/bench_resource_b.o \
   $K/bench_resource_c.o \
   $K/bench_resource_harness.o \
+  $K/bench_budget_window.o \
+  $K/bench_span_window_selftest.o \
+  $K/span_observe.o \
   $K/swtch.o \
   $K/trampoline.o \
   $K/trap.o \
@@ -189,6 +192,7 @@ UPROGS=\
 	$U/_burn\
 	$U/_statstest\
 	$U/_mixbench\
+	$U/_budgetdiag\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
